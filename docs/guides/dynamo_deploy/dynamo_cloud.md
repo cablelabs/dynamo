@@ -155,7 +155,7 @@ kubectl config set-context --current --namespace=$NAMESPACE
 ./deploy.sh
 ```
 
-if you wish to be guided through the deployment process, you can run the deploy script with the `--interactive` flag:
+if you want guidance during the deployment process, you can run the deploy script with the `--interactive` flag:
 
 ```bash
 ./deploy.sh --interactive
