@@ -1,26 +1,8 @@
-# Dynamo Kubernetes Operator Documentation
+# Dynamo Kubernetes Operator
 
 ## Overview
 
 Dynamo operator is a Kubernetes operator that simplifies the deployment, configuration, and lifecycle management of DynamoGraphs. It automates the reconciliation of custom resources to ensure your desired state is always achieved. This operator is ideal for users who want to manage complex deployments using declarative YAML definitions and Kubernetes-native tooling.
-
----
-
-## Table of Contents
-
-- [Overview](#overview)
-- [Architecture](#architecture)
-- [Custom Resource Definitions (CRDs)](#custom-resource-definitions-crds)
-- [Installation](#installation)
-- [Usage](#usage)
-- [Examples](#examples)
-- [Reconciliation Logic](#reconciliation-logic)
-- [Configuration](#configuration)
-- [Troubleshooting](#troubleshooting)
-- [Development](#development)
-- [References](#references)
-
----
 
 ## Architecture
 
@@ -38,7 +20,7 @@ Dynamo operator is a Kubernetes operator that simplifies the deployment, configu
   3. Kubernetes resources (Deployments, Services, etc.) are created or updated to match the CR spec.
   4. Status fields are updated to reflect the current state.
 
----
+
 
 ## Custom Resource Definitions (CRDs)
 
@@ -92,8 +74,6 @@ spec:
       - name: SPECIFIC_ENV_VAR
         value: some_specific_value
 ```
-
----
 
 ### CRD: `DynamoComponentDeployment`
 
@@ -150,8 +130,6 @@ spec:
   serviceName: Frontend
 ```
 
----
-
 ### CRD: `DynamoComponent`
 
 | Field                           | Type                     | Description                                                                          | Required | Default |
@@ -181,20 +159,15 @@ spec:
   dynamoComponent: frontend:jh2o6dqzpsgfued4
 ```
 
-
----
-
 ## Installation
 
-[See installation steps](dynamo_cloud.md#deployment-steps)
+[See installation steps](dynamo_cloud.md#overview)
 
----
 
 ## Deploying a Dynamo Pipeline using the Operator
 
 [See deployment steps](operator_deployment.md)
 
----
 
 ## Reconciliation Logic
 
@@ -220,8 +193,6 @@ spec:
   - Create a job to build the docker image
 - **Status Management:**
   - `.status.conditions`: Reflects readiness, failure, progress states
-
----
 
 ## Configuration
 
@@ -251,7 +222,6 @@ spec:
   | `--etcdAddr`          | Address of etcd server                     | ""      |
 
 
----
 
 ## Troubleshooting
 
@@ -261,7 +231,6 @@ spec:
 | Status not updated     | CRD schema mismatch           | Regenerate CRDs with kubebuilder  |
 | Image build hangs      | Misconfigured DynamoComponent | Check image build logs            |
 
----
 
 ## Development
 
@@ -273,7 +242,6 @@ The operator is built using Kubebuilder and the operator-sdk, with the following
   - `api/v1alpha1/` – CRD types
   - `config/` – Manifests and Helm charts
 
----
 
 ## References
 

@@ -84,7 +84,7 @@ and driven by a transparent, OSS (Open Source Software) first development approa
    Disaggregated Serving <architecture/disagg_serving.md>
    KV Block Manager <architecture/kvbm_intro.rst>
    KV Cache Routing <architecture/kv_cache_routing.md>
-   Planner <guides/planner.md>
+   Planner <architecture/planner.md>
 
 .. toctree::
    :hidden:
@@ -104,6 +104,7 @@ and driven by a transparent, OSS (Open Source Software) first development approa
    Disaggregation and Performance Tuning <guides/disagg_perf_tuning.md>
    KV Cache Router Performance Tuning <guides/kv_router_perf_tuning.md>
    Planner Benchmark Example <guides/planner_benchmark/benchmark_planner.md>
+   Dynamo Kubernetes Operator <guides/dynamo_deploy/dynamo_operator.md>
 
 .. toctree::
    :hidden:
