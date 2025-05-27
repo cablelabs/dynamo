@@ -43,6 +43,7 @@ dependencies = [
     "networkx",
     "pandas",
     "tabulate",
+    "types-tabulate",
     "transformers",
     "pytest-mypy",
 ]
