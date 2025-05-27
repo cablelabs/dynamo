@@ -16,3 +16,4 @@
 networkx
 pandas
 tabulate
+types-tabulate
