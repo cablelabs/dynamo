@@ -194,7 +194,7 @@ impl Scheduler {
         kv_capacity: usize,
         watermark: f64,
         block_size: usize,
-        chunk_size: Option<usize>,
+        speedup_ratio: Option<f64>,
         output_tx: Option<mpsc::Sender<Uuid>>,
         cancellation_token: Option<CancellationToken>,
     ) -> Self {
@@ -205,7 +205,16 @@ impl Scheduler {
         let state = Arc::new(Mutex::new(SchedulerState::default()));
 
         let kv_manager = Arc::new(Mutex::new(kv_manager));
-        let chunk_size = chunk_size.unwrap_or(256);
+
+        // Assert speedup_ratio is greater than 0 if provided
+        if let Some(ratio) = speedup_ratio {
+            assert!(
+                ratio > 0.0,
+                "speedup_ratio must be greater than 0, got: {}",
+                ratio
+            );
+        }
+        let speedup_ratio = speedup_ratio.unwrap_or(1.0);
 
         // Create channel for request handling
         let (request_tx, mut request_rx) = mpsc::channel::<DirectRequest>(1024);
@@ -242,7 +251,7 @@ impl Scheduler {
                         // Process DirectRequests, converting them to ActiveSequence and scheduling them until we can't
                         // schedule anymore.
                         while let Some((uuid, request)) = state_guard.next() {
-                            let active_sequence = get_active_sequence(request, block_size, chunk_size);
+                            let active_sequence = get_active_sequence(request, block_size);
 
                             // Calculate token budget using new_tokens from PrefillCost
                             let total_prefill_tokens = state_guard.num_batched_tokens();
@@ -271,10 +280,10 @@ impl Scheduler {
                         let mut state_guard = state_clone.lock().await;
                         let mut kv_manager_guard = kv_manager_clone.lock().await;
 
-                        // Base time needed for decoding (assumed memory bound on KV cache)
-                        let active_tokens = kv_manager_guard.num_active_blocks() * block_size;
-                        // TODO: 2 is a dummy / magic scaling factor
-                        let mut generation_time = Duration::from_micros((active_tokens / 2) as u64);
+                        // Base time needed for decoding using active percentage and quadratic formula
+                        let active_perc = kv_manager_guard.get_active_perc();
+                        let decoding_time = -5.47 * active_perc.powi(2) + 43.88 * active_perc + 19.44;
+                        let mut total_time = Duration::from_secs_f64(decoding_time / 1000.0);
 
                         // Process each running request
                         let uuids: Vec<Uuid> = state_guard.running.keys().cloned().collect();
@@ -285,7 +294,7 @@ impl Scheduler {
                             }
 
                             // Get prefill compute value first
-                            let prefill_compute = state_guard.get_prefill_compute(&uuid);
+                            let prefill_compute = state_guard.get_prefill_compute(&uuid).unwrap_or(0.);
 
                             // Get the active sequence for this UUID
                             let sequence = state_guard.requests.get_mut(&uuid)
@@ -294,14 +303,6 @@ impl Scheduler {
 
                             // Generate token and get signals
                             let signals = sequence.generate();
-
-                            // Accumulate sleep duration based on prefill_compute if available
-                            // prefill compute = (cached_tokens + new_tokens) * new_tokens
-                            let sleep_ms = if let Some(compute) = prefill_compute {
-                                // TODO: 1024 is a dummy / magic scaling factor
-                                (compute / 1024.0) as u64
-                            } else { 0 };
-                            generation_time += Duration::from_micros(sleep_ms);
 
                             // Process all signals with the KvManager
                             // Handling of preemption on failure
@@ -319,8 +320,10 @@ impl Scheduler {
                                 continue;
                             }
 
+                            // Accumulate sleep duration based on prefill_compute if available
+                            total_time += Duration::from_secs_f64(prefill_compute / 1000.0);
+
                             // Send UUID notification for each generated token
-                            // TODO: hook this up to an AsyncEngine
                             if let Some(tx) = &output_tx_clone {
                                 let _ = tx.try_send(uuid);
                             }
@@ -337,9 +340,10 @@ impl Scheduler {
                             }
                         }
 
-                        // Sleep once for the accumulated duration
-                        if generation_time.as_millis() > 0 {
-                            tokio::time::sleep(generation_time).await;
+                        // Sleep once for the adjusted duration
+                        let adjusted_time = Duration::from_secs_f64(total_time.as_secs_f64() / speedup_ratio);
+                        if adjusted_time.as_millis() > 0 {
+                            tokio::time::sleep(adjusted_time).await;
                         }
                     }
                 }
@@ -405,7 +409,7 @@ impl Scheduler {
 }
 
 /// Convert a Request to an ActiveSequence
-fn get_active_sequence(request: Request, block_size: usize, chunk_size: usize) -> ActiveSequence {
+fn get_active_sequence(request: Request, block_size: usize) -> ActiveSequence {
     if let Request::Active(active_seq) = request {
         return active_seq;
     }
@@ -418,7 +422,6 @@ fn get_active_sequence(request: Request, block_size: usize, chunk_size: usize) -
         direct_request.tokens,
         direct_request.max_output_tokens,
         Some(block_size),
-        Some(chunk_size),
     )
 }
 
@@ -475,7 +478,6 @@ mod tests {
         let kv_capacity: usize = 500;
         let watermark: f64 = 0.01; // 1% watermark
         let block_size: usize = 64;
-        let chunk_size: usize = 256;
         let num_requests: usize = 100;
         let input_len: usize = 1000;
         let max_output_tokens: usize = 100;
@@ -488,7 +490,7 @@ mod tests {
             kv_capacity,
             watermark,
             block_size,
-            Some(chunk_size),
+            Some(10.0), // speedup_ratio
             Some(output_tx),
             None,
         );

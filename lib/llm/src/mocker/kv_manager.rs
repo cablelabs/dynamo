@@ -200,6 +200,11 @@ impl KvManager {
         self.active_blocks.len()
     }
 
+    /// Get the percentage of active blocks relative to maximum capacity
+    pub fn get_active_perc(&self) -> f64 {
+        self.active_blocks.len() as f64 / self.max_capacity as f64
+    }
+
     /// Get the number of inactive blocks
     pub fn num_inactive_blocks(&self) -> usize {
         self.inactive_blocks.len()
@@ -261,7 +266,7 @@ impl KvManager {
 
         // Calculate prefill compute
         let prefill_compute =
-            new_tokens as f64 * (new_tokens + overlap_blocks * self.block_size) as f64;
+            1.25e-6 * (new_tokens as f64).powi(2) + 7.41e-2 * (new_tokens as f64) + 2.62e1;
 
         Some(PrefillCost {
             new_tokens,
