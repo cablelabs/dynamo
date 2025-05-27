@@ -174,7 +174,7 @@ impl SchedulerState {
 
         // Insert the new sequence back into the requests map and add to waiting queue
         self.requests.insert(uuid, Request::Active(active_sequence));
-        self.waiting.push_back(uuid);
+        self.waiting.push_front(uuid);
 
         Some(signals)
     }
@@ -546,7 +546,7 @@ mod tests {
                 // Manual debug ticker that prints forward pass metrics
                 _ = debug_interval.tick() => {
                     let _metrics = scheduler.get_forward_pass_metrics().await;
-                    // println!("Forward Pass Metrics: {:#?}", _metrics);
+                    println!("Forward Pass Metrics: {:#?}", _metrics);
                 }
 
                 Some(_) = output_rx.recv() => {
