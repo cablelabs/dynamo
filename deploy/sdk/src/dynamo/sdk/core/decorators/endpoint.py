@@ -31,7 +31,7 @@ T = TypeVar("T")
 class DynamoEndpoint(DynamoEndpointInterface):
     """
     Base class for dynamo endpoints
-    Dynamo endpoints are methods decorated with @dynamo_endpoint.
+    Dynamo endpoints are methods decorated with @endpoint.
     """
 
     def __init__(
@@ -77,8 +77,7 @@ def abstract_dynamo_endpoint(func: t.Callable) -> t.Callable:
     func.__is_abstract_dynamo__ = True
     return abc.abstractmethod(func)
 
-# Decorator for concrete dynamo endpoints
-def dynamo_endpoint(
+def endpoint(
     name: Optional[str] = None,
     transports: Optional[List[DynamoTransport]] = None,
     **kwargs,
@@ -91,7 +90,7 @@ def dynamo_endpoint(
     return decorator
 
 
-def dynamo_api(
+def api(
     name: Optional[str] = None,
     **kwargs,
 ) -> Callable[[Callable], DynamoEndpoint]:
