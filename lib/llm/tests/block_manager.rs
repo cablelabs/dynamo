@@ -71,6 +71,10 @@ pub mod llm_kvbm {
         /// Buffer State
         #[builder(private)]
         buffer: Arc<Mutex<BufferState>>,
+
+        /// Max batch size
+        #[builder(default = 128)]
+        max_batch_size: usize,
     }
 
     impl KVBMDynamoRuntimeComponent {
@@ -88,10 +92,9 @@ pub mod llm_kvbm {
             event_name: impl AsRef<str> + Send + Sync,
             event: &(impl Serialize + Send + Sync),
         ) -> Result<()> {
-            const MAX_BATCH_SIZE: usize = 1;
             let mut buffer = self.buffer.lock().await;
             buffer.push_store(event)?;
-            if buffer.should_flush(MAX_BATCH_SIZE) {
+            if buffer.should_flush(self.max_batch_size) {
                 self.flush_batch(&mut buffer, event_name).await?;
             }
             Ok(())
@@ -102,10 +105,9 @@ pub mod llm_kvbm {
             event_name: impl AsRef<str> + Send + Sync,
             event: &(impl Serialize + Send + Sync),
         ) -> Result<()> {
-            const MAX_BATCH_SIZE: usize = 1;
             let mut buffer = self.buffer.lock().await;
             buffer.push_remove(event)?;
-            if buffer.should_flush(MAX_BATCH_SIZE) {
+            if buffer.should_flush(self.max_batch_size) {
                 self.flush_batch(&mut buffer, event_name).await?;
             }
             Ok(())
@@ -410,6 +412,7 @@ mod tests {
         let _kvbm_component = KVBMDynamoRuntimeComponentBuilder::from_runtime(dtr.clone())
             .name("kvbm_component".to_string())
             .namespace(ns.clone())
+            .max_batch_size(1)
             .build()
             .unwrap();
 
@@ -471,6 +474,7 @@ mod tests {
         let kvbm_component = KVBMDynamoRuntimeComponentBuilder::from_runtime(dtr.clone())
             .name("kvbm_component".to_string())
             .namespace(ns.clone())
+            .max_batch_size(1)
             .build()
             .unwrap();
 
@@ -525,6 +529,7 @@ mod tests {
         let kvbm_component = KVBMDynamoRuntimeComponentBuilder::from_runtime(dtr.clone())
             .name("kvbm_component".to_string())
             .namespace(ns.clone())
+            .max_batch_size(1)
             .build()
             .unwrap();
 
@@ -635,6 +640,7 @@ mod tests {
         let kvbm_component = KVBMDynamoRuntimeComponentBuilder::from_runtime(dtr.clone())
             .name("kvbm_component".to_string())
             .namespace(ns.clone())
+            .max_batch_size(1)
             .build()
             .unwrap();
 
@@ -716,6 +722,7 @@ mod tests {
         let kvbm_component = KVBMDynamoRuntimeComponentBuilder::from_runtime(dtr)
         .name("kvbm_component".to_string())
         .namespace(ns.clone())
+        .max_batch_size(1)
         .build()
         .unwrap();
 
