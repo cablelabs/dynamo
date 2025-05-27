@@ -19,7 +19,7 @@ use super::offload::OffloadManager;
 use super::{
     block::{Block, ImmutableBlock},
     config::NixlOptions,
-    metrics::BlockManagerMetrics,
+    metrics::{BlockManagerMetrics, PoolMetrics},
 };
 use cudarc::driver::CudaStream;
 use std::sync::Arc;
@@ -77,7 +77,7 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<Metadata> {
         // Create a map of NIXL backends
         let mut nixl_backends: HashMap<String, Arc<nixl_sys::Backend>> = HashMap::new();
 
-        let metrics_manager = BlockManagerMetrics::new(&config.runtime.metrics_registry)?;
+        let metrics = BlockManagerMetrics::new(&config.runtime.metrics_registry)?;
 
         // Create a NIXL agent if NIXL is enabled and instantiate requested backends
         // TODO: Build a map of NIXL backends to block pools/sets
@@ -141,6 +141,7 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<Metadata> {
                     next_block_set_idx,
                     cancellation_token.clone(),
                     worker_id,
+                    metrics.pool("disk"),
                 )?;
                 (Some(Arc::new(pool)), Some(blocks))
             }
@@ -161,6 +162,7 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<Metadata> {
                 next_block_set_idx,
                 cancellation_token.clone(),
                 worker_id,
+                metrics.pool("host"),
             )?;
             (Some(Arc::new(pool)), Some(blocks))
         } else {
@@ -180,6 +182,7 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<Metadata> {
                 next_block_set_idx,
                 cancellation_token.clone(),
                 worker_id,
+                metrics.pool("device"),
             )?;
             (Some(Arc::new(pool)), Some(blocks))
         } else {
@@ -207,7 +210,7 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<Metadata> {
             device_pool.clone(),
             nixl_agent.clone(),
             offload_async_rt_handle,
-            metrics_manager.clone(),
+            metrics.clone(),
         )?;
 
         let state = Arc::new(Self {
@@ -488,10 +491,12 @@ fn create_block_pool<S: Storage + NixlRegisterableStorage, M: BlockMetadata>(
     block_set_idx: usize,
     cancellation_token: CancellationToken,
     worker_id: WorkerID,
+    pool_metrics: Arc<PoolMetrics>,
 ) -> Result<(BlockPool<S, M>, Vec<Block<S, M>>)> {
     let blocks = block::layout_to_blocks::<_, M>(layout, block_set_idx, worker_id)?;
     let pool = BlockPool::<S, M>::builder()
         .cancel_token(cancellation_token)
+        .pool_metrics(pool_metrics)
         .build()?;
     Ok((pool, blocks))
 }
