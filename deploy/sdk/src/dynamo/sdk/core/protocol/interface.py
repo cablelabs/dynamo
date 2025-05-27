@@ -118,12 +118,7 @@ class ServiceInterface(Generic[T], ABC):
     def link(self, next_service: "ServiceInterface") -> "ServiceInterface":
         """Link this service to another service, creating a pipeline.
 
-        This method allows linking a concrete service implementation to a service that depends on an interface.
-        It will:
-        1. Find all interface dependencies in the current service
-        2. Check if the next_service implements any of those interfaces
-        3. If exactly one match is found, override that dependency
-        4. If no matches or multiple matches are found, raise an error
+        This method allows linking (injecting) a concrete service implementation by checking if there is a dependency that next_service implements/inherits from.
 
         Args:
             next_service: The concrete service implementation to link
@@ -134,38 +129,35 @@ class ServiceInterface(Generic[T], ABC):
         Raises:
             ValueError: If no matching interface is found or if multiple matches are found
         """
-        # Get all dependencies that may be on interfaces, storing both interface and dep_key
-        interface_deps = [
-            (dep.on.inner, dep_key, dep)
-            for dep_key, dep in self.dependencies.items()
-            if dep.on is not None and issubclass(dep.on.inner, AbstractDynamoService)
-        ]
+        if not isinstance(next_service, ServiceInterface):
+            raise ValueError(f"link must be passed a Service, got {type(next_service)}")
 
-        if not interface_deps:
-            # If no AbstractDynamoServices dependencies found, just record the link
-            LinkedServices.add((self, next_service))
-            return next_service
+        # Get all the deps of the service
+        inner_deps = [(dep.on.inner, dep_key, dep) for dep_key, dep in self.dependencies.items()]
 
+        # Get the inner class of the passed in service
         curr_inner = next_service.inner
-        # Find interfaces that next_service implements
-        matching_interfaces = []
-        for interface, dep_key, original_dep in interface_deps:
-            if issubclass(curr_inner, interface):
-                matching_interfaces.append((interface, dep_key, original_dep))
 
-        if not matching_interfaces:
+        # Find deps that next_service implements/inherits from
+        matching_deps = []
+        for dep_inner, dep_key, original_dep in inner_deps:
+            if issubclass(curr_inner, dep_inner):
+                matching_deps.append((dep_inner, dep_key, original_dep))
+
+        
+        if not matching_deps:
             raise ValueError(
-                f"{curr_inner.__name__} does not implement any interfaces required by {self.name}"
+                f"{curr_inner.__name__} does not fulfill any dependencies required by {self.name}"
             )
 
-        if len(matching_interfaces) > 1:
-            interface_names = [interface.__name__ for interface, _, _ in matching_interfaces]
+        if len(matching_deps) > 1:
+            dep_names = [dep_key for _, _, dep_key in matching_deps]
             raise ValueError(
-                f"{curr_inner.__name__} implements multiple interfaces required by {self.name}: {interface_names}"
+                f"{curr_inner.__name__} fulfills multiple dependencies required by {self.name}: {dep_names}"
             )
 
         # Get the matching interface, dep_key, and original dependency
-        _, _, matching_dep = matching_interfaces[0]
+        _, _, matching_dep = matching_deps[0]
 
         # Let's hot swap the on of the existing dependency with the new service
         matching_dep.on = next_service
@@ -254,8 +246,8 @@ def _get_abstract_dynamo_endpoints(cls: type) -> Set[str]:
 def _check_dynamo_endpoint_implemented(cls: type, name: str) -> bool:
     """Check if an endpoint is properly implemented."""
     impl = getattr(cls, name, None)
-    # Ensure the implementation is a callable DynamoEndpoint
-    return impl and callable(impl) and isinstance(impl, DynamoEndpoint)
+    # Ensure the implementation is a callable DynamoEndpointInterface
+    return impl and callable(impl) and isinstance(impl, DynamoEndpointInterface)
 
 
 def validate_dynamo_interfaces(cls: type) -> None:
@@ -280,7 +272,7 @@ def validate_dynamo_interfaces(cls: type) -> None:
             not_callable.append((name, type(impl).__name__))
             continue
 
-        if not isinstance(impl, DynamoEndpoint):
+        if not isinstance(impl, DynamoEndpointInterface):
             undecorated.append(name)
 
     problems = []

@@ -3,7 +3,7 @@ import pytest
 from dynamo.sdk.lib.decorators import (
     AbstractDynamoService,
     abstract_dynamo_endpoint,
-    dynamo_endpoint,
+    endpoint,
 )
 from dynamo.sdk.lib.service import service
 
@@ -26,26 +26,26 @@ class ExtraInterface(AbstractDynamoService):
 
 @service
 class GoodService(TestInterface, ExtraInterface):
-    @dynamo_endpoint
+    @endpoint
     def foo(self, x: int) -> int:
         return x + 1
 
-    @dynamo_endpoint
+    @endpoint
     def bar(self, y: int) -> int:
         return y + 1
 
-    @dynamo_endpoint
+    @endpoint
     def baz(self, z: int) -> int:
         return z + 1
 
 
 @service
 class ParentService(TestInterface):
-    @dynamo_endpoint
+    @endpoint
     def foo(self, x: int) -> int:
         return x + 1
 
-    @dynamo_endpoint
+    @endpoint
     def bar(self, y: int) -> int:
         return y + 1
 
@@ -76,11 +76,11 @@ def test_missing_implementation():
 
         @service
         class MissingEndpointService(TestInterface, ExtraInterface):
-            @dynamo_endpoint
+            @endpoint
             def foo(self, x: int) -> int:
                 return x + 1
 
-            @dynamo_endpoint
+            @endpoint
             def bar(self, y: int) -> int:
                 return y + 1
 
@@ -96,11 +96,11 @@ def test_undecorated_method():
             def foo(self, x: int) -> int:
                 return x + 1
 
-            @dynamo_endpoint
+            @endpoint
             def bar(self, y: int) -> int:
                 return y + 1
 
-    assert "method(s) not decorated with @dynamo_endpoint: foo" in str(exc_info.value)
+    assert "method(s) not decorated with @endpoint: foo" in str(exc_info.value)
 
 
 def test_non_callable():

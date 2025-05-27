@@ -26,7 +26,8 @@ from dynamo.sdk import (
     AbstractDynamoService,
     abstract_dynamo_endpoint,
     depends,
-    dynamo_endpoint,
+    endpoint,
+    api,
     service,
 )
 
@@ -70,9 +71,12 @@ class RouterInterface(AbstractDynamoService):
         pass
 
 
-@service(dynamo={"enabled": True, "namespace": "llm-hello-world"}, image=DYNAMO_IMAGE)
+@service(
+    dynamo={"namespace": "llm-hello-world"},
+    image=DYNAMO_IMAGE,
+)
 class VllmWorker(WorkerInterface):
-    @dynamo_endpoint()
+    @endpoint()
     async def generate(self, request: ChatRequest):
         # Convert to Spongebob case (randomly capitalize letters)
         for token in request.text.split():
@@ -82,20 +86,26 @@ class VllmWorker(WorkerInterface):
             yield spongebob_token
 
 
-@service(dynamo={"enabled": True, "namespace": "llm-hello-world"}, image=DYNAMO_IMAGE)
+@service(
+    dynamo={"namespace": "llm-hello-world"},
+    image=DYNAMO_IMAGE,
+)
 class TRTLLMWorker(WorkerInterface):
-    @dynamo_endpoint()
+    @endpoint()
     async def generate(self, request: ChatRequest):
         # Convert to SHOUTING case
         for token in request.text.split():
             yield token.upper()
 
 
-@service(dynamo={"enabled": True, "namespace": "llm-hello-world"}, image=DYNAMO_IMAGE)
+@service(
+    dynamo={"namespace": "llm-hello-world"},
+    image=DYNAMO_IMAGE,
+)
 class SlowRouter(RouterInterface):
     worker = depends(WorkerInterface)  # Will be overridden by link()
 
-    @dynamo_endpoint()
+    @endpoint()
     async def generate(self, request: ChatRequest):
         print("Routing slow")
         async for response in self.worker.generate(request.model_dump_json()):
@@ -103,11 +113,14 @@ class SlowRouter(RouterInterface):
             yield response
 
 
-@service(dynamo={"enabled": True, "namespace": "llm-hello-world"}, image=DYNAMO_IMAGE)
+@service(
+    dynamo={"namespace": "llm-hello-world"},
+    image=DYNAMO_IMAGE,
+)
 class FastRouter(RouterInterface):
     worker = depends(WorkerInterface)  # Will be overridden by link()
 
-    @dynamo_endpoint()
+    @endpoint()
     async def generate(self, request: ChatRequest):
         print("Routing fast")
         async for response in self.worker.generate(request.model_dump_json()):
@@ -118,11 +131,15 @@ class FastRouter(RouterInterface):
 app = FastAPI()
 
 
-@service(dynamo={"enabled": True, "namespace": "llm-hello-world"}, image=DYNAMO_IMAGE, app=app)
+@service(
+    dynamo={"namespace": "llm-hello-world"},
+    image=DYNAMO_IMAGE,
+    app=app,
+)
 class Frontend:
     router = depends(RouterInterface)  # Will be overridden by link()
 
-    @dynamo_endpoint(is_api=True)
+    @api()
     async def generate(self, request: ChatRequest):
         print(f"Received request: {request}")
         async def content_generator():

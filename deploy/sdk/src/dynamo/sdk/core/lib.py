@@ -73,11 +73,11 @@ def _get_or_create_abstract_service_instance(
         dynamo_config_for_abstract = DynamoConfig(enabled=True)
 
         # Call the main service() decorator/function to create the service instance
+        # validate_dynamo_interfaces is False because validating an interface has implemented dynamo endpoints will obviously fail
         service_instance = service(
             inner=abstract_service_cls,
-            dynamo=dynamo_config_for_abstract
-            # app will be None by default
-            # **kwargs for ServiceConfig will be empty, so ServiceConfig({}) is created inside service()
+            dynamo=dynamo_config_for_abstract,
+            validate_dynamo_interfaces=False,
         )
         _abstract_service_cache[abstract_service_cls] = service_instance
         return service_instance
@@ -90,6 +90,7 @@ def service(
     *,
     dynamo: Optional[Union[Dict[str, Any], DynamoConfig]] = None,
     app: Optional[FastAPI] = None,
+    validate_dynamo_interfaces: bool = True,
     **kwargs: Any,
 ) -> Any:
     """Service decorator that's adapter-agnostic"""
@@ -105,8 +106,9 @@ def service(
     assert isinstance(dynamo_config, DynamoConfig)
 
     def decorator(inner: Type[T]) -> ServiceInterface[T]:
-        # Validate Dynamo interfaces before creating the service
-        _validate_dynamo_interfaces(inner)
+        # Ensures that all declared dynamo endpoints on the parent interfaces are implemented
+        if validate_dynamo_interfaces:
+            validate_dynamo_interfaces(inner)
 
         provider = get_target()
         if inner is not None:
