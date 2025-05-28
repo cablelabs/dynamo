@@ -183,6 +183,9 @@ impl ModelManager {
         model_name: &str,
         component: &Component,
         kv_cache_block_size: usize,
+        overlap_score_weight: Option<f64>,
+        gpu_cache_usage_weight: Option<f64>,
+        waiting_requests_weight: Option<f64>,
     ) -> anyhow::Result<Arc<KvRouter>> {
         if let Some(kv_chooser) = self.get_kv_chooser(model_name) {
             // Check if the existing router has a different block size
@@ -197,8 +200,14 @@ impl ModelManager {
             }
             return Ok(kv_chooser);
         }
-        self.create_kv_chooser(model_name, component, kv_cache_block_size)
-            .await
+        self.create_kv_chooser(
+            model_name, 
+            component, 
+            kv_cache_block_size,
+            overlap_score_weight,
+            gpu_cache_usage_weight,
+            waiting_requests_weight,
+        ).await
     }
 
     fn get_kv_chooser(&self, model_name: &str) -> Option<Arc<KvRouter>> {
@@ -211,8 +220,15 @@ impl ModelManager {
         model_name: &str,
         component: &Component,
         kv_cache_block_size: usize,
+        overlap_score_weight: Option<f64>,
+        gpu_cache_usage_weight: Option<f64>,
+        waiting_requests_weight: Option<f64>,
     ) -> anyhow::Result<Arc<KvRouter>> {
-        let selector = Box::new(DefaultWorkerSelector {});
+        let selector = Box::new(DefaultWorkerSelector::new(
+            overlap_score_weight,
+            gpu_cache_usage_weight,
+            waiting_requests_weight,
+        ));
         let chooser = KvRouter::new(component.clone(), kv_cache_block_size, Some(selector)).await?;
         let new_kv_chooser = Arc::new(chooser);
         self.kv_choosers

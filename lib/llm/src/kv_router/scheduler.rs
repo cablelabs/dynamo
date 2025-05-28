@@ -286,10 +286,10 @@ impl WorkerSelector for DefaultWorkerSelector {
             };
 
             // Calculate logit using same formula as Python
-            let logit = 2.0 * score - gpu_cache_usage - normalized_waiting;
+            let logit = self.overlap_score_weight * score - self.gpu_cache_usage_weight * gpu_cache_usage - self.waiting_requests_weight * normalized_waiting;
 
             tracing::trace!(
-                "Formula for {worker_id}: {logit:.3} = 2.0 * {score:.3} - {gpu_cache_usage:.3} - {normalized_waiting:.3}",
+                "Formula for {worker_id}: {logit:.3} = {self.overlap_score_weight:.3} * {score:.3} - {self.gpu_cache_usage_weight:.3} * {gpu_cache_usage:.3} - {self.waiting_requests_weight:.3} * {normalized_waiting:.3}",
             );
 
             // Track best workers
