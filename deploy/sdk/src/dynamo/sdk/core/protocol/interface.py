@@ -68,7 +68,7 @@ class ServiceConfig(BaseModel):
     """Base service configuration that can be extended by adapters"""
 
     dynamo: DynamoConfig
-    resource: ResourceConfig = ResourceConfig()
+    resources: ResourceConfig = ResourceConfig()
     workers: int = 1
     image: str | None = None
     envs: List[Env] | None = None
