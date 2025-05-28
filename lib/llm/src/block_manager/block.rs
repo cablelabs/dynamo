@@ -178,7 +178,17 @@ impl<S: Storage, M: BlockMetadata> Block<S, M> {
             BlockState::Complete(state) => Ok(state.token_block().sequence_hash()),
             BlockState::Registered(state) => Ok(state.sequence_hash()),
             _ => Err(BlockError::InvalidState(
-                "Block is not complete".to_string(),
+                "Block is not complete nor registered.".to_string(),
+            )),
+        }
+    }
+
+    pub fn parent_sequence_hash(&self) -> Result<Option<SequenceHash>, BlockError> {
+        match self.state() {
+            BlockState::Complete(state) => Ok(state.token_block().parent_sequence_hash()),
+            BlockState::Registered(state) => Ok(state.parent_sequence_hash()),
+            _ => Err(BlockError::InvalidState(
+                "Block is not complete nor registered.".to_string(),
             )),
         }
     }
@@ -602,6 +612,9 @@ pub(crate) fn layout_to_blocks<S: Storage, M: BlockMetadata>(
 pub struct MutableBlock<S: Storage, M: BlockMetadata> {
     block: Option<Block<S, M>>,
     return_tx: tokio::sync::mpsc::UnboundedSender<Block<S, M>>,
+    // Use to track parent relationship, as well as ensure that parents of registered blocks stay
+    // alive as long as the child is alive.
+    parent: Option<Arc<MutableBlock<S, M>>>,
 }
 
 impl<S: Storage + NixlDescriptor, M: BlockMetadata> WritableBlock for MutableBlock<S, M> {
@@ -623,7 +636,12 @@ impl<S: Storage, M: BlockMetadata> MutableBlock<S, M> {
         Self {
             block: Some(block),
             return_tx,
+            parent: None,
         }
+    }
+
+    pub fn set_parent(&mut self, parent: Arc<MutableBlock<S, M>>) {
+        self.parent = Some(parent);
     }
 }
 
@@ -766,7 +784,7 @@ impl<S: Storage, M: BlockMetadata> ImmutableBlock<S, M> {
         Self { block }
     }
 
-    pub fn mutable_block(&self) -> &Arc<MutableBlock<S, M>> {
+    pub(crate) fn mutable_block(&self) -> &Arc<MutableBlock<S, M>> {
         &self.block
     }
 }
