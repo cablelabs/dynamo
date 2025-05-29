@@ -54,8 +54,6 @@ pub mod llm_kvbm {
     use std::sync::atomic::{AtomicU64, Ordering};
     use tokio::sync::mpsc;
 
-    //-------------------------------- KVBM Runtime Component --------------------------------
-
     pub const KV_EVENT_SUBJECT: &str = "kv_events";
 
     #[derive(Debug, Clone)]
@@ -213,7 +211,6 @@ pub mod llm_kvbm {
                 .await?)
         }
     }
-    //-------------------------------- End Event Publisher --------------------------------
 
     /// Translate the Dynamo [`DistributedRuntime`] to the [`kvbm::config::KvManagerRuntimeConfig`]
     #[derive(Clone, Builder, Dissolve)]
@@ -239,7 +236,6 @@ pub mod llm_kvbm {
                 .build()?)
         }
     }
-    //-------------------------------- Event Manager --------------------------------
 
     // Event enum for background event processing// Event enum for background event processing
     pub enum Event {
@@ -366,7 +362,6 @@ pub mod llm_kvbm {
             });
         }
     }
-    //-------------------------------- End Event Manager --------------------------------
 }
 
 #[cfg(all(test, feature = "testing-full"))]
@@ -400,8 +395,6 @@ mod tests {
     use tokio::time::Duration;
 
     pub type ReferenceBlockManager = KvBlockManager<BasicMetadata>;
-
-    //-------------------------------- Test Helpers --------------------------------
 
     fn create_sequence() -> TokenBlockSequence {
         let tokens = Tokens::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
@@ -503,7 +496,6 @@ mod tests {
         (kvbm_component, rt)
     }
 
-    //-------------------------------- Test Cases --------------------------------
     #[test]
     fn test_dynamo_block_manager() {
         // Check if we're already in a Tokio runtime context
