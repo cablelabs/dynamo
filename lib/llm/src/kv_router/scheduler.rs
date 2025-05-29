@@ -20,13 +20,13 @@ use serde::{Deserialize, Serialize};
 use std::borrow::BorrowMut;
 use std::collections::HashMap;
 
+use super::protocols::WorkerSelectionResult;
+use super::WorkerSelector;
 use crate::kv_router::indexer::OverlapScores;
 pub use crate::kv_router::protocols::ForwardPassMetrics;
 use crate::kv_router::scoring::ProcessedEndpoints;
+use crate::kv_router::KvRouterConfig;
 use crate::kv_router::KV_HIT_RATE_SUBJECT;
-
-use super::protocols::WorkerSelectionResult;
-use super::WorkerSelector;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KVHitRateEvent {
@@ -233,31 +233,21 @@ pub fn process_worker_selection(
 // Default implementation matching the Python _cost_function
 #[derive(Debug, Clone)]
 pub struct DefaultWorkerSelector {
-    pub overlap_score_weight: f64,
-    pub gpu_cache_usage_weight: f64,
-    pub waiting_requests_weight: f64,
+    pub kv_router_config: KvRouterConfig,
 }
 
 impl Default for DefaultWorkerSelector {
     fn default() -> Self {
         Self {
-            overlap_score_weight: 2.0,
-            gpu_cache_usage_weight: 1.0,
-            waiting_requests_weight: 1.0,
+            kv_router_config: KvRouterConfig::default(),
         }
     }
 }
 
 impl DefaultWorkerSelector {
-    pub fn new(
-        overlap_score_weight: Option<f64>,
-        gpu_cache_usage_weight: Option<f64>,
-        waiting_requests_weight: Option<f64>,
-    ) -> Self {
+    pub fn new(kv_router_config: Option<KvRouterConfig>) -> Self {
         Self {
-            overlap_score_weight: overlap_score_weight.unwrap_or(2.0),
-            gpu_cache_usage_weight: gpu_cache_usage_weight.unwrap_or(1.0),
-            waiting_requests_weight: waiting_requests_weight.unwrap_or(1.0),
+            kv_router_config: kv_router_config.unwrap_or(KvRouterConfig::default()),
         }
     }
 }
@@ -314,13 +304,15 @@ impl WorkerSelector for DefaultWorkerSelector {
             };
 
             // Calculate logit using same formula as Python
-            let logit = self.overlap_score_weight * score - self.gpu_cache_usage_weight * gpu_cache_usage - self.waiting_requests_weight * normalized_waiting;
+            let logit = self.kv_router_config.overlap_score_weight * score
+                - self.kv_router_config.gpu_cache_usage_weight * gpu_cache_usage
+                - self.kv_router_config.waiting_requests_weight * normalized_waiting;
 
             tracing::trace!(
                 "Formula for {worker_id}: {logit:.3} = {:.1} * {score:.3} - {:.1} * {gpu_cache_usage:.3} - {:.1} * {normalized_waiting:.3}",
-                self.overlap_score_weight,
-                self.gpu_cache_usage_weight, 
-                self.waiting_requests_weight,
+                self.kv_router_config.overlap_score_weight,
+                self.kv_router_config.gpu_cache_usage_weight,
+                self.kv_router_config.waiting_requests_weight,
             );
 
             // Track best workers

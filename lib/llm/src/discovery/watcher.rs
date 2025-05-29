@@ -18,7 +18,7 @@ use dynamo_runtime::{
 
 use crate::{
     backend::Backend,
-    kv_router::KvPushRouter,
+    kv_router::{KvPushRouter, KvRouterConfig},
     model_type::ModelType,
     preprocessor::{BackendInput, OpenAIPreprocessor},
     protocols::common::llm_backend::LLMEngineOutput,
@@ -36,9 +36,7 @@ pub struct ModelWatcher {
     drt: DistributedRuntime,
     router_mode: RouterMode,
     notify_on_model: Notify,
-    overlap_score_weight: Option<f64>,
-    gpu_cache_usage_weight: Option<f64>,
-    waiting_requests_weight: Option<f64>,
+    kv_router_config: Option<KvRouterConfig>,
 }
 
 impl ModelWatcher {
@@ -46,18 +44,14 @@ impl ModelWatcher {
         runtime: DistributedRuntime,
         model_manager: Arc<ModelManager>,
         router_mode: RouterMode,
-        overlap_score_weight: Option<f64>,
-        gpu_cache_usage_weight: Option<f64>,
-        waiting_requests_weight: Option<f64>,
+        kv_router_config: Option<KvRouterConfig>,
     ) -> ModelWatcher {
         Self {
             manager: model_manager,
             drt: runtime,
             router_mode,
             notify_on_model: Notify::new(),
-            overlap_score_weight,
-            gpu_cache_usage_weight,
-            waiting_requests_weight,
+            kv_router_config,
         }
     }
 
@@ -218,12 +212,10 @@ impl ModelWatcher {
                         let chooser = self
                             .manager
                             .kv_chooser_for(
-                                &model_entry.name, 
-                                &component, 
+                                &model_entry.name,
+                                &component,
                                 card.kv_cache_block_size,
-                                self.overlap_score_weight,
-                                self.gpu_cache_usage_weight,
-                                self.waiting_requests_weight,
+                                self.kv_router_config.clone(),
                             )
                             .await?;
                         let kv_push_router = KvPushRouter::new(router, chooser);
@@ -260,12 +252,10 @@ impl ModelWatcher {
                         let chooser = self
                             .manager
                             .kv_chooser_for(
-                                &model_entry.name, 
-                                &component, 
+                                &model_entry.name,
+                                &component,
                                 card.kv_cache_block_size,
-                                self.overlap_score_weight,
-                                self.gpu_cache_usage_weight,
-                                self.waiting_requests_weight,
+                                self.kv_router_config.clone(),
                             )
                             .await?;
                         let kv_push_router = KvPushRouter::new(router, chooser);

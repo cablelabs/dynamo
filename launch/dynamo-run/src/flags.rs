@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use clap::ValueEnum;
+use dynamo_llm::kv_router::KvRouterConfig;
 use dynamo_runtime::pipeline::RouterMode as RuntimeRouterMode;
 
 /// Required options depend on the in and out choices
@@ -153,6 +154,15 @@ pub struct Flags {
 }
 
 impl Flags {
+    /// Get KV router configuration
+    pub fn kv_router_config(&self) -> KvRouterConfig {
+        KvRouterConfig::new(
+            self.kv_overlap_score_weight,
+            self.kv_gpu_cache_usage_weight,
+            self.kv_waiting_requests_weight,
+        )
+    }
+
     /// Convert the flags back to a command line. Including only the non-null values, but
     /// include the defaults. Includes the canonicalized model path and normalized model name.
     ///

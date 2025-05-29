@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use crate::input::common;
 use crate::{EngineConfig, Flags};
+use dynamo_llm::kv_router::KvRouterConfig;
 use dynamo_llm::{
     discovery::{ModelManager, ModelWatcher, MODEL_ROOT_PATH},
     engines::StreamingEngineAdapter,
@@ -46,9 +47,7 @@ pub async fn run(
                         etcd_client.clone(),
                         MODEL_ROOT_PATH,
                         flags.router_mode.into(),
-                        flags.kv_overlap_score_weight,
-                        flags.kv_gpu_cache_usage_weight,
-                        flags.kv_waiting_requests_weight,
+                        Some(flags.kv_router_config()),
                     )
                     .await?;
                 }
@@ -105,18 +104,9 @@ async fn run_watcher(
     etcd_client: etcd::Client,
     network_prefix: &str,
     router_mode: RouterMode,
-    overlap_score_weight: Option<f64>,
-    gpu_cache_usage_weight: Option<f64>,
-    waiting_requests_weight: Option<f64>,
+    kv_router_config: Option<KvRouterConfig>,
 ) -> anyhow::Result<()> {
-    let watch_obj = ModelWatcher::new(
-        runtime, 
-        model_manager, 
-        router_mode,
-        overlap_score_weight,
-        gpu_cache_usage_weight,
-        waiting_requests_weight,
-    );
+    let watch_obj = ModelWatcher::new(runtime, model_manager, router_mode, kv_router_config);
     tracing::info!("Watching for remote model at {network_prefix}");
     let models_watcher = etcd_client.kv_get_and_watch_prefix(network_prefix).await?;
     let (_prefix, _watcher, receiver) = models_watcher.dissolve();
