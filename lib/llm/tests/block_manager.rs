@@ -307,7 +307,7 @@ pub mod llm_kvbm {
                         };
                         let data = KvCacheEventData::Stored(store_data);
                         let event = KvCacheEvent {
-                            event_id: event_id,
+                            event_id,
                             data,
                         };
                         let router_event = RouterEvent::new(worker_identifier as i64, event);
@@ -588,7 +588,7 @@ mod tests {
         let sequence = create_sequence();
         let rt = Runtime::from_current().unwrap();
         let dtr = DistributedRuntime::from_settings(rt.clone()).await.unwrap();
-        let namespace_name = "test_event_manager_drop_vec".to_string();
+        let namespace_name = "test2_event_manager_drop_vec".to_string();
         let ns = dtr.namespace(namespace_name).unwrap();
         let kvbm_component = KVBMDynamoRuntimeComponent::new(
             dtr.clone(),
