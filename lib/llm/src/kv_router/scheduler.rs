@@ -231,23 +231,15 @@ pub fn process_worker_selection(
 }
 
 // Default implementation matching the Python _cost_function
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct DefaultWorkerSelector {
     pub kv_router_config: KvRouterConfig,
-}
-
-impl Default for DefaultWorkerSelector {
-    fn default() -> Self {
-        Self {
-            kv_router_config: KvRouterConfig::default(),
-        }
-    }
 }
 
 impl DefaultWorkerSelector {
     pub fn new(kv_router_config: Option<KvRouterConfig>) -> Self {
         Self {
-            kv_router_config: kv_router_config.unwrap_or(KvRouterConfig::default()),
+            kv_router_config: kv_router_config.unwrap_or_default(),
         }
     }
 }
