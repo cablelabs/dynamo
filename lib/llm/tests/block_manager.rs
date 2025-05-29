@@ -644,7 +644,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let manager = Arc::new(DynamoEventManager::new(kvbm_component.clone(), dtr.primary_lease().unwrap().id() as u64)); // Split the tuple
+        let manager = Arc::new(DynamoEventManager::new(kvbm_component.clone(), dtr.primary_lease().unwrap().id() as u64));
         let event_manager: Arc<dyn EventManager> = manager.clone();
         let mut publisher = manager.publisher();
 
@@ -670,7 +670,7 @@ mod tests {
         // Add a timeout to prevent the test from hanging indefinitely
         let timeout = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             while let Some(msg) = subscriber.next().await {
-                let received = String::from_utf8(msg.payload.to_vec()).expect("Failed to decode message payload");
+                let _received = String::from_utf8(msg.payload.to_vec()).expect("Failed to decode message payload");
                 event_count += 1;
 
                 if event_count == 1 {
@@ -687,7 +687,7 @@ mod tests {
         event_count = 0;
         let timeout = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             while let Some(msg) = subscriber.next().await {
-                let received = String::from_utf8(msg.payload.to_vec()).expect("Failed to decode message payload");
+                let _received = String::from_utf8(msg.payload.to_vec()).expect("Failed to decode message payload");
                 event_count += 1;
 
                 if event_count == 1 {
@@ -704,12 +704,23 @@ mod tests {
 
     #[test]
     fn test_dynamo_block_manager_blocking() {
-        //let event_manager = DynamoEventManager::new();
+        //todo!()
     }
 
     #[tokio::test]
     async fn test_dynamo_block_manager_async() {
-        //let event_manager = DynamoEventManager::new();
+        let rt = Runtime::from_current().unwrap();
+        let dtr = DistributedRuntime::from_settings(rt.clone()).await.unwrap();
+        let namespace_name = "test_publisher".to_string();
+        let ns = dtr.namespace(namespace_name).unwrap();
+        let kvbm_component = KVBMDynamoRuntimeComponentBuilder::from_runtime(dtr.clone())
+            .name("kvbm_component".to_string())
+            .namespace(ns.clone())
+            .max_batch_size(1)
+            .build()
+            .unwrap();
+
+        let _manager = Arc::new(DynamoEventManager::new(kvbm_component.clone(), dtr.primary_lease().unwrap().id() as u64));
     }
 
     #[tokio::test]
