@@ -30,9 +30,9 @@ pub mod llm_kvbm {
     // std imports
     use std::collections::VecDeque;
     use std::sync::Arc;
-    use tokio::sync::Mutex;
     use async_trait::async_trait;
     use serde::Serialize;
+    use tokio::time::{Duration, Instant, sleep};
 
     use anyhow::{Result};
     use derive_builder::Builder;
@@ -43,7 +43,6 @@ pub mod llm_kvbm {
     use dynamo_runtime::component::Namespace;
     use dynamo_runtime::prelude::DistributedRuntimeProvider;
     use tokio::sync::mpsc;
-    pub const KV_EVENT_SUBJECT: &str = "kv_events";
     use dynamo_runtime::traits::events::EventPublisher;
     use kvbm::events::EventManager;
     use dynamo_llm::kv_router::{
@@ -54,6 +53,66 @@ pub mod llm_kvbm {
     };
 
 //-------------------------------- KVBM Runtime Component --------------------------------
+
+    pub const KV_EVENT_SUBJECT: &str = "kv_events";
+
+    #[derive(Debug, Clone)]
+    pub enum PublisherEvent {
+        Store(RouterEvent),
+        Remove(RouterEvent),
+    }
+
+    pub async fn start_batching_publisher(
+        component: Arc<KVBMDynamoRuntimeComponent>,
+        mut rx: mpsc::Receiver<PublisherEvent>,
+        max_batch_size: usize,
+        deadline: Duration,
+    ) {
+        let mut buffer: VecDeque<RouterEvent> = VecDeque::new();
+        let mut timer = sleep(deadline);
+        tokio::pin!(timer);
+
+        loop {
+            tokio::select! {
+                // Deadline fired
+                _ = &mut timer, if !buffer.is_empty() => {
+                    let events: Vec<RouterEvent> = buffer.drain(..).collect();
+                    let _ = component.publish(&KV_EVENT_SUBJECT, &events).await;
+                    timer.as_mut().reset(Instant::now() + deadline);
+                }
+
+                // New event received
+                maybe_evt = rx.recv() => {
+                    match maybe_evt {
+                        Some(PublisherEvent::Store(data)) => {
+                            buffer.push_back(data);
+                            if buffer.len() >= max_batch_size {
+                                let events: Vec<RouterEvent> = buffer.drain(..).collect();
+                                let _ = component.publish(&KV_EVENT_SUBJECT, &events).await;
+                                timer.as_mut().reset(Instant::now() + deadline);
+                            }
+                        }
+                        Some(PublisherEvent::Remove(data)) => {
+                            buffer.push_back(data);
+                            // On remove, always flush immediately
+                            let events: Vec<RouterEvent> = buffer.drain(..).collect();
+                            let _ = component.publish(&KV_EVENT_SUBJECT, &events).await;
+                            timer.as_mut().reset(Instant::now() + deadline);
+                        }
+                        None => {
+                            // Channel closed, flush remaining
+                            if !buffer.is_empty() {
+                                let events: Vec<RouterEvent> = buffer.drain(..).collect();
+                                let _ = component.publish(&KV_EVENT_SUBJECT, &events).await;
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     #[derive(Builder, Clone)]
     #[builder(pattern = "owned")]
     pub struct KVBMDynamoRuntimeComponent {
@@ -70,14 +129,40 @@ pub mod llm_kvbm {
 
         /// Buffer State
         #[builder(private)]
-        buffer: Arc<Mutex<BufferState>>,
+        batch_tx: mpsc::Sender<PublisherEvent>,
 
-        /// Max batch size
-        #[builder(default = 128)]
-        max_batch_size: usize,
     }
 
     impl KVBMDynamoRuntimeComponent {
+
+        pub fn new(
+            drt: DistributedRuntime,
+            name: String,
+            namespace: Namespace,
+            deadline: Duration,
+            max_batch_size: usize,
+        ) -> Arc<Self> {
+            let (tx, rx) = mpsc::channel(2048);
+
+            let component = Arc::new(Self {
+                drt,
+                name,
+                namespace,
+                batch_tx: tx
+            });
+
+            let batching_component = Arc::clone(&component);
+            batching_component.drt.runtime().secondary().spawn(async move {
+                start_batching_publisher(
+                    batching_component,
+                    rx,
+                    max_batch_size,
+                    deadline
+                ).await;
+            });
+
+            component
+        }
 
         pub fn namespace(&self) -> &Namespace {
             &self.namespace
@@ -87,49 +172,9 @@ pub mod llm_kvbm {
             self.name.clone()
         }
 
-        async fn publish_store(
-            &self,
-            event_name: impl AsRef<str> + Send + Sync,
-            event: &(impl Serialize + Send + Sync),
-        ) -> Result<()> {
-            let mut buffer = self.buffer.lock().await;
-            buffer.push_store(event)?;
-            if buffer.should_flush(self.max_batch_size) {
-                self.flush_batch(&mut buffer, event_name).await?;
-            }
-            Ok(())
-        }
-
-        async fn publish_remove(
-            &self,
-            event_name: impl AsRef<str> + Send + Sync,
-            event: &(impl Serialize + Send + Sync),
-        ) -> Result<()> {
-            let mut buffer = self.buffer.lock().await;
-            buffer.push_remove(event)?;
-            if buffer.should_flush(self.max_batch_size) {
-                self.flush_batch(&mut buffer, event_name).await?;
-            }
-            Ok(())
-        }
-
-        async fn flush_batch(&self, buffer: &mut BufferState, event_name: impl AsRef<str> + Send + Sync) -> Result<()> {
-            let events = buffer.drain_batch();
-            for event in events {
-                match event {
-                    BatchedEvent::Store { data } | BatchedEvent::Remove { data } => {
-                        self.publish_bytes(&event_name, data).await?;
-                    }
-                }
-            }
-            Ok(())
-        }
-    }
-
-    impl KVBMDynamoRuntimeComponentBuilder {
-
-        pub fn from_runtime(drt: DistributedRuntime) -> Self {
-            Self::default().drt(drt).buffer(Arc::new(Mutex::new(BufferState::default())))
+        #[cfg(test)]
+        pub fn batch_tx(&self) -> mpsc::Sender<PublisherEvent> {
+            self.batch_tx.clone()
         }
     }
 
@@ -137,39 +182,6 @@ pub mod llm_kvbm {
         fn drt(&self) -> &DistributedRuntime {
             &self.drt
         }
-    }
-
-    #[derive(Default)]
-    struct BufferState {
-        buffer: VecDeque<BatchedEvent>,
-    }
-
-    impl BufferState {
-        pub fn push_store(&mut self, event: &impl Serialize) -> serde_json::Result<()> {
-            let data = serde_json::to_vec(event)?;
-            self.buffer.push_back(BatchedEvent::Store { data });
-            Ok(())
-        }
-
-        pub fn push_remove(&mut self, event: &impl Serialize) -> serde_json::Result<()> {
-            let data = serde_json::to_vec(event)?;
-            self.buffer.push_back(BatchedEvent::Remove { data });
-            Ok(())
-        }
-
-        pub fn should_flush(&self, max_batch_size: usize) -> bool {
-            self.buffer.len() >= max_batch_size
-        }
-
-        pub fn drain_batch(&mut self) -> Vec<BatchedEvent> {
-            self.buffer.drain(..).collect()
-        }
-    }
-
-    #[derive(Debug, Clone)]
-    pub enum BatchedEvent {
-        Store { data: Vec<u8> },
-        Remove { data: Vec<u8> },
     }
 
     #[async_trait]
@@ -203,18 +215,6 @@ pub mod llm_kvbm {
     }
 //-------------------------------- End Event Publisher --------------------------------
 
-    // Event enum for background event processing
-    pub enum Event {
-        RegisterMultiple {
-            blocks: Vec<(SequenceHash, BlockHash, Option<SequenceHash>)>,
-            worker_identifier: u64,
-        },
-        Release {
-            sequence_hash: SequenceHash,
-            worker_identifier: u64,
-        }
-    }
-
     /// Translate the Dynamo [`DistributedRuntime`] to the [`kvbm::config::KvManagerRuntimeConfig`]
     #[derive(Clone, Builder, Dissolve)]
     #[builder(pattern = "owned", build_fn(private, name = "build_internal"))]
@@ -240,6 +240,19 @@ pub mod llm_kvbm {
         }
     }
 //-------------------------------- Event Manager --------------------------------
+
+    // Event enum for background event processing// Event enum for background event processing
+    pub enum Event {
+        RegisterMultiple {
+            blocks: Vec<(SequenceHash, BlockHash, Option<SequenceHash>)>,
+            worker_identifier: u64,
+        },
+        Release {
+            sequence_hash: SequenceHash,
+            worker_identifier: u64,
+        }
+    }
+
     /// Implementation of the [`kvbm::events::EventManager`] for the Dynamo Runtime Event Plane + the
     /// Dynamo LLM KV router message protocol.
     #[derive(Clone)]
@@ -250,7 +263,7 @@ pub mod llm_kvbm {
 
     impl DynamoEventManager {
 
-        pub fn new(component: KVBMDynamoRuntimeComponent, worker_identifier: u64) -> Self {
+        pub fn new(component: Arc<KVBMDynamoRuntimeComponent>, worker_identifier: u64) -> Self {
             let (tx, rx) = mpsc::unbounded_channel();
             let event_id_counter = Arc::new(AtomicU64::new(0));
             worker_task(component, rx, event_id_counter.clone());
@@ -265,7 +278,7 @@ pub mod llm_kvbm {
 
     // Worker task to receive and process messages
     pub fn worker_task(
-        component: KVBMDynamoRuntimeComponent,
+        component: Arc<KVBMDynamoRuntimeComponent>,
         mut rx: mpsc::UnboundedReceiver<Event>,
         event_id_counter: Arc<AtomicU64>,
     ) {
@@ -293,8 +306,8 @@ pub mod llm_kvbm {
                         data,
                     };
                     let router_event = RouterEvent::new(worker_identifier as i64, event);
-                    if let Err(e) = component_clone.publish_store(KV_EVENT_SUBJECT, &router_event).await {
-                        tracing::warn!("Failed to publish registration event: {:?}", e);
+                    if let Err(e) = component_clone.batch_tx.send(PublisherEvent::Store(router_event)).await {
+                        tracing::warn!("Failed to send event to batch channel: {:?}", e);
                     }
                 }
                 Event::Release { sequence_hash, worker_identifier } => {
@@ -305,8 +318,8 @@ pub mod llm_kvbm {
                         }),
                     };
                     let router_event = RouterEvent::new(worker_identifier as i64, event);
-                    if let Err(e) = component_clone.publish_remove(KV_EVENT_SUBJECT, &router_event).await {
-                        tracing::warn!("Failed to publish block release event: {:?}", e);
+                    if let Err(e) = component_clone.batch_tx.send(PublisherEvent::Remove(router_event)).await {
+                        tracing::warn!("Failed to send event to batch channel: {:?}", e);
                     }
                 }
                 }
@@ -360,11 +373,18 @@ mod tests {
 
     use dynamo_llm::tokens::{TokenBlockSequence, Tokens};
     use std::sync::Arc;
+    use tokio::time::Duration;
     use dynamo_llm::block_manager::events::EventManager;
     use dynamo_runtime::traits::events::{EventPublisher, EventSubscriber};
     use futures::stream::StreamExt;
     use dynamo_llm::block_manager::block::BlockExt;
     //use dynamo_llm::block_manager::storage::{DeviceAllocator, PinnedAllocator};
+    use dynamo_llm::kv_router::{
+        protocols::{
+            ExternalSequenceBlockHash, LocalBlockHash, KvCacheEvent, KvCacheEventData, KvCacheRemoveData, KvCacheStoreData, KvCacheStoredBlockData,
+        },
+        indexer::RouterEvent,
+    };
 
     pub type ReferenceBlockManager = KvBlockManager<BasicMetadata>;
 
@@ -375,6 +395,7 @@ mod tests {
         let config = LayoutConfig {
             num_blocks: 1,
             num_layers: 5,
+            outer_dim: 2,
             page_size: 4,
             inner_dim: 13,
             alignment: alignment.unwrap_or(1),
@@ -409,12 +430,9 @@ mod tests {
         let dtr = DistributedRuntime::from_settings(rt.clone()).await.unwrap();
         let nixl = NixlOptions::Enabled;
         let ns = dtr.namespace("test".to_string()).unwrap();
-        let _kvbm_component = KVBMDynamoRuntimeComponentBuilder::from_runtime(dtr.clone())
-            .name("kvbm_component".to_string())
-            .namespace(ns.clone())
-            .max_batch_size(1)
-            .build()
-            .unwrap();
+        let _kvbm_component = KVBMDynamoRuntimeComponent::new(
+            dtr.clone(), "kvbm_component".to_string(),
+            ns.clone(), Duration::from_secs(10), 1/*max_batch_size*/);
 
         let dyn_config = DynamoKvbmRuntimeConfig::builder()
             .runtime(dtr.clone())
@@ -471,12 +489,9 @@ mod tests {
         let dtr = DistributedRuntime::from_settings(rt.clone()).await.unwrap();
         let namespace_name = "test_event_manager_drop_vec".to_string();
         let ns = dtr.namespace(namespace_name).unwrap();
-        let kvbm_component = KVBMDynamoRuntimeComponentBuilder::from_runtime(dtr.clone())
-            .name("kvbm_component".to_string())
-            .namespace(ns.clone())
-            .max_batch_size(1)
-            .build()
-            .unwrap();
+        let kvbm_component = KVBMDynamoRuntimeComponent::new(
+            dtr.clone(), "kvbm_component".to_string(),
+            ns.clone(), Duration::from_secs(10), 1/*max_batch_size*/);
 
         let manager = Arc::new(DynamoEventManager::new(kvbm_component.clone(), dtr.primary_lease().unwrap().id() as u64)); // Split the tuple
         let event_manager: Arc<dyn EventManager> = manager;
@@ -498,7 +513,8 @@ mod tests {
         let mut event_count = 0;
         let timeout = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             while let Some(msg) = subscriber.next().await {
-                let _received = String::from_utf8(msg.payload.to_vec()).expect("Failed to decode message payload");
+                let received = String::from_utf8(msg.payload.to_vec()).expect("Failed to decode message payload");
+                println!("Received event: {}", received);
                 event_count += 1;
 
                 if event_count == expected_events {
@@ -519,6 +535,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test2_event_manager_drop_vec() {
+        dynamo_runtime::logging::init();
+        let sequence = create_sequence();
+        let rt = Runtime::from_current().unwrap();
+        let dtr = DistributedRuntime::from_settings(rt.clone()).await.unwrap();
+        let namespace_name = "test_event_manager_drop_vec".to_string();
+        let ns = dtr.namespace(namespace_name).unwrap();
+        let kvbm_component = KVBMDynamoRuntimeComponent::new(
+            dtr.clone(), "kvbm_component".to_string(),
+            ns.clone(), Duration::from_millis(500), 2/*max_batch_size*/);
+
+        let manager = Arc::new(DynamoEventManager::new(kvbm_component.clone(), dtr.primary_lease().unwrap().id() as u64)); // Split the tuple
+        let mut publisher = manager.publisher();
+        let event_manager: Arc<dyn EventManager> = manager;
+        // Create a subscriber
+        let mut subscriber = ns.subscribe(KV_EVENT_SUBJECT.to_string()).await.unwrap();
+
+        let publish_handle1 = BlockRegistry::create_publish_handle(&sequence.blocks()[0], event_manager.clone());
+        let publish_handle2 = BlockRegistry::create_publish_handle(&sequence.blocks()[1], event_manager.clone());
+
+        // Remove handles before adding to publisher
+        let reg_handle1 = publish_handle1.remove_handle();
+
+        // Add disarmed handles to publisher
+        publisher.take_handle(publish_handle1);
+
+        publisher.publish();
+
+        let timeout = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while let Some(msg) = subscriber.next().await {
+                let received = String::from_utf8(msg.payload.to_vec()).expect("Failed to decode message payload");
+                println!("Received event: {}", received);
+                break;
+            }
+        }).await;
+
+        let reg_handle2 = publish_handle2.remove_handle();
+        publisher.take_handle(publish_handle2);
+
+        // No event should have been triggered yet
+        let timeout = tokio::time::timeout(std::time::Duration::from_millis(1000), subscriber.next()).await;
+        assert!(timeout.is_err(), "Unexpected event triggered before dropping publish_handles");
+
+        drop(publisher);
+
+        let expected_events = 1; // 2 events per handle, but should only get one
+        let mut event_count = 0;
+        let timeout = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while let Some(msg) = subscriber.next().await {
+                let received = String::from_utf8(msg.payload.to_vec()).expect("Failed to decode message payload");
+                println!("Received event: {}", received);
+                event_count += 1;
+
+                if event_count == expected_events {
+                    break;
+                }
+            }
+        }).await;
+
+        if timeout.is_err() {
+            panic!("Test timed out while waiting for events");
+        }
+
+        assert_eq!(event_count, expected_events, "Expected {} events to be triggered", expected_events);
+
+        let timeout = tokio::time::timeout(std::time::Duration::from_millis(1000), subscriber.next()).await;
+        assert!(timeout.is_err(), "Unexpected event received after the expected events");
+        rt.shutdown();
+    }
+
+    #[tokio::test]
     async fn test_block_pool_publishing() {
         const EXPECTED_SEQUENCE_HASH: u64 = 14643705804678351452;
 
@@ -526,12 +613,9 @@ mod tests {
         let dtr = DistributedRuntime::from_settings(rt.clone()).await.unwrap();
         let namespace_name = "test_block_pool_publishing".to_string();
         let ns = dtr.namespace(namespace_name).unwrap();
-        let kvbm_component = KVBMDynamoRuntimeComponentBuilder::from_runtime(dtr.clone())
-            .name("kvbm_component".to_string())
-            .namespace(ns.clone())
-            .max_batch_size(1)
-            .build()
-            .unwrap();
+        let kvbm_component = KVBMDynamoRuntimeComponent::new(
+            dtr.clone(), "kvbm_component".to_string(),
+            ns.clone(), Duration::from_secs(10), 1/*max_batch_size*/);
 
         let manager = Arc::new(DynamoEventManager::new(kvbm_component.clone(), dtr.primary_lease().unwrap().id() as u64)); // Split the tuple
         let event_manager: Arc<dyn EventManager> = manager.clone();
@@ -637,12 +721,9 @@ mod tests {
         let dtr = DistributedRuntime::from_settings(rt.clone()).await.unwrap();
         let namespace_name = "test_publisher".to_string();
         let ns = dtr.namespace(namespace_name).unwrap();
-        let kvbm_component = KVBMDynamoRuntimeComponentBuilder::from_runtime(dtr.clone())
-            .name("kvbm_component".to_string())
-            .namespace(ns.clone())
-            .max_batch_size(1)
-            .build()
-            .unwrap();
+        let kvbm_component = KVBMDynamoRuntimeComponent::new(
+            dtr.clone(), "kvbm_component".to_string(),
+            ns.clone(), Duration::from_secs(10), 1/*max_batch_size*/);
 
         let manager = Arc::new(DynamoEventManager::new(kvbm_component.clone(), dtr.primary_lease().unwrap().id() as u64));
         let event_manager: Arc<dyn EventManager> = manager.clone();
@@ -713,12 +794,9 @@ mod tests {
         let dtr = DistributedRuntime::from_settings(rt.clone()).await.unwrap();
         let namespace_name = "test_publisher".to_string();
         let ns = dtr.namespace(namespace_name).unwrap();
-        let kvbm_component = KVBMDynamoRuntimeComponentBuilder::from_runtime(dtr.clone())
-            .name("kvbm_component".to_string())
-            .namespace(ns.clone())
-            .max_batch_size(1)
-            .build()
-            .unwrap();
+        let kvbm_component = KVBMDynamoRuntimeComponent::new(
+            dtr.clone(), "kvbm_component".to_string(),
+            ns.clone(), Duration::from_secs(10), 1/*max_batch_size*/);
 
         let _manager = Arc::new(DynamoEventManager::new(kvbm_component.clone(), dtr.primary_lease().unwrap().id() as u64));
     }
@@ -730,12 +808,9 @@ mod tests {
         let namespace_name = "test_kvbm_component".to_string();
         let ns = dtr.namespace(namespace_name).unwrap();
 
-        let kvbm_component = KVBMDynamoRuntimeComponentBuilder::from_runtime(dtr)
-        .name("kvbm_component".to_string())
-        .namespace(ns.clone())
-        .max_batch_size(1)
-        .build()
-        .unwrap();
+        let kvbm_component = KVBMDynamoRuntimeComponent::new(
+            dtr.clone(), "kvbm_component".to_string(),
+            ns.clone(), Duration::from_secs(10), 1/*max_batch_size*/);
 
         // Create a subscriber
         let mut subscriber = ns.subscribe("testing_channel".to_string()).await.unwrap();
@@ -747,6 +822,108 @@ mod tests {
             let received = String::from_utf8(msg.payload.to_vec()).unwrap();
             assert_eq!(received, "\"test_message\"");
         }
+
+        rt.shutdown();
+    }
+
+    #[tokio::test]
+    async fn test_batching_publisher() {
+        let rt = Runtime::from_current().unwrap();
+        let dtr = DistributedRuntime::from_settings(rt.clone()).await.unwrap();
+        let namespace_name = "test_batching_publisher".to_string();
+        let ns = dtr.namespace(namespace_name).unwrap();
+
+        // Create component with small batch size and short deadline for testing
+        let kvbm_component = KVBMDynamoRuntimeComponent::new(
+            dtr.clone(),
+            "kvbm_component".to_string(),
+            ns.clone(),
+            Duration::from_millis(100), // Short deadline
+            2 // Small batch size
+        );
+
+        // Create a subscriber
+        let mut subscriber = ns.subscribe(KV_EVENT_SUBJECT.to_string()).await.unwrap();
+
+        // Test 1: Batch based on max_batch_size
+        let tx = kvbm_component.batch_tx();
+
+        // Send two store events - should trigger batch due to max_batch_size
+        let event1 = RouterEvent::new(1, KvCacheEvent {
+            event_id: 1,
+            data: KvCacheEventData::Stored(KvCacheStoreData {
+                blocks: vec![KvCacheStoredBlockData {
+                    block_hash: ExternalSequenceBlockHash(1),
+                    tokens_hash: LocalBlockHash(1),
+                }],
+                parent_hash: None,
+            }),
+        });
+
+        let event2 = RouterEvent::new(2, KvCacheEvent {
+            event_id: 2,
+            data: KvCacheEventData::Stored(KvCacheStoreData {
+                blocks: vec![KvCacheStoredBlockData {
+                    block_hash: ExternalSequenceBlockHash(2),
+                    tokens_hash: LocalBlockHash(2),
+                }],
+                parent_hash: None,
+            }),
+        });
+
+        tx.send(PublisherEvent::Store(event1)).await.unwrap();
+        tx.send(PublisherEvent::Store(event2)).await.unwrap();
+
+        // Should receive one batch with both events
+        let msg = subscriber.next().await.unwrap();
+        let received: Vec<RouterEvent> = serde_json::from_slice(&msg.payload).unwrap();
+        assert_eq!(received.len(), 2, "Should receive both events in one batch");
+        println!("Received event: {:?}", received);
+
+        // Test 2: Batch based on deadline
+        let event3 = RouterEvent::new(3, KvCacheEvent {
+            event_id: 3,
+            data: KvCacheEventData::Stored(KvCacheStoreData {
+                blocks: vec![KvCacheStoredBlockData {
+                    block_hash: ExternalSequenceBlockHash(3),
+                    tokens_hash: LocalBlockHash(3),
+                }],
+                parent_hash: None,
+            }),
+        });
+
+        tx.send(PublisherEvent::Store(event3)).await.unwrap();
+
+        // Wait for deadline to trigger
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        // Should receive the event after deadline
+        let msg = subscriber.next().await.unwrap();
+        let received: Vec<RouterEvent> = serde_json::from_slice(&msg.payload).unwrap();
+        assert_eq!(received.len(), 1, "Should receive single event after deadline");
+        println!("Received event: {:?}", received);
+
+        // Test 3: Immediate flush for Remove event
+        let event4 = RouterEvent::new(4, KvCacheEvent {
+            event_id: 4,
+            data: KvCacheEventData::Removed(KvCacheRemoveData {
+                block_hashes: vec![ExternalSequenceBlockHash(4)],
+            }),
+        });
+
+        tx.send(PublisherEvent::Remove(event4)).await.unwrap();
+
+        // Should receive remove event immediately
+        let msg = subscriber.next().await.unwrap();
+        let received: Vec<RouterEvent> = serde_json::from_slice(&msg.payload).unwrap();
+        assert_eq!(received.len(), 1, "Should receive remove event immediately");
+        println!("Received event: {:?}", received);
+        // Test 4: Channel closure
+        drop(tx); // Close the channel
+
+        // No more events should be received
+        let timeout = tokio::time::timeout(Duration::from_millis(200), subscriber.next()).await;
+        assert!(timeout.is_err(), "Should not receive any more events after channel closure");
 
         rt.shutdown();
     }
