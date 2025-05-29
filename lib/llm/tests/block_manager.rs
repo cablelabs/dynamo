@@ -450,13 +450,17 @@ mod tests {
         let dtr = DistributedRuntime::from_settings(rt.clone()).await.unwrap();
         let nixl = NixlOptions::Enabled;
         let ns = dtr.namespace("test".to_string()).unwrap();
-        let _kvbm_component = KVBMDynamoRuntimeComponent::new(
+        let kvbm_component = KVBMDynamoRuntimeComponent::new(
             dtr.clone(),
             "kvbm_component".to_string(),
             ns.clone(),
             Duration::from_secs(10),
             1, /*max_batch_size*/
         );
+        let manager = Arc::new(DynamoEventManager::new(
+            kvbm_component.clone(),
+            dtr.primary_lease().unwrap().id() as u64,
+        ));
 
         let dyn_config = DynamoKvbmRuntimeConfig::builder()
             .runtime(dtr.clone())
@@ -474,6 +478,7 @@ mod tests {
                     .build()
                     .unwrap(),
             )
+            .event_manager(Some(manager))
             .build()
             .unwrap();
 
@@ -481,6 +486,64 @@ mod tests {
     }
 
     //-------------------------------- Test Cases --------------------------------
+    #[test]
+    fn test_dynamo_block_manager() {
+        // Check if we're already in a Tokio runtime context
+        let async_runtime = if tokio::runtime::Handle::try_current().is_ok() {
+            None // If we're already in a runtime, don't create a new one
+        } else {
+            // Only create a new runtime if not already in one
+            Some(Arc::new(tokio::runtime::Runtime::new().unwrap()))
+        };
+
+        let future = async {
+            let rt = Runtime::from_current().unwrap();
+            let dtr = DistributedRuntime::from_settings(rt.clone()).await.unwrap();
+            let namespace_name = "test_dynamo_block_manager".to_string();
+            let ns = dtr.namespace(namespace_name).unwrap();
+            let kvbm_component = KVBMDynamoRuntimeComponent::new(
+                dtr.clone(),
+                "kvbm_component".to_string(),
+                ns.clone(),
+                Duration::from_secs(10),
+                1, /*max_batch_size*/
+            );
+
+            let _manager = Arc::new(DynamoEventManager::new(
+                kvbm_component.clone(),
+                dtr.primary_lease().unwrap().id() as u64,
+            ));
+        };
+
+        // If we're already in a runtime, just run the future
+        if let Some(runtime) = async_runtime {
+            runtime.block_on(future);
+        } else {
+            // If we're already in a runtime context, we can just await the future
+            tokio::runtime::Handle::current().block_on(future);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_dynamo_block_manager_async() {
+        let rt = Runtime::from_current().unwrap();
+        let dtr = DistributedRuntime::from_settings(rt.clone()).await.unwrap();
+        let namespace_name = "test_dynamo_block_manager_async".to_string();
+        let ns = dtr.namespace(namespace_name).unwrap();
+        let kvbm_component = KVBMDynamoRuntimeComponent::new(
+            dtr.clone(),
+            "kvbm_component".to_string(),
+            ns.clone(),
+            Duration::from_secs(10),
+            1, /*max_batch_size*/
+        );
+
+        let _manager = Arc::new(DynamoEventManager::new(
+            kvbm_component.clone(),
+            dtr.primary_lease().unwrap().id() as u64,
+        ));
+    }
+
     #[tokio::test]
     async fn test_create_dynamo_block_manager() {
         let _block_manager = create_dynamo_block_manager();
@@ -887,31 +950,6 @@ mod tests {
             panic!("Test timed out while waiting for events");
         }
         rt.shutdown();
-    }
-
-    #[test]
-    fn test_dynamo_block_manager_blocking() {
-        //todo!()
-    }
-
-    #[tokio::test]
-    async fn test_dynamo_block_manager_async() {
-        let rt = Runtime::from_current().unwrap();
-        let dtr = DistributedRuntime::from_settings(rt.clone()).await.unwrap();
-        let namespace_name = "test_publisher".to_string();
-        let ns = dtr.namespace(namespace_name).unwrap();
-        let kvbm_component = KVBMDynamoRuntimeComponent::new(
-            dtr.clone(),
-            "kvbm_component".to_string(),
-            ns.clone(),
-            Duration::from_secs(10),
-            1, /*max_batch_size*/
-        );
-
-        let _manager = Arc::new(DynamoEventManager::new(
-            kvbm_component.clone(),
-            dtr.primary_lease().unwrap().id() as u64,
-        ));
     }
 
     #[tokio::test]
