@@ -114,6 +114,7 @@ and driven by a transparent, OSS (Open Source Software) first development approa
    Deploying Dynamo Inference Graphs to Kubernetes using the Dynamo Cloud Platform <guides/dynamo_deploy/operator_deployment.md>
    Manual Helm Deployment <guides/dynamo_deploy/manual_helm_deployment.md>
    Minikube Setup Guide <guides/dynamo_deploy/minikube.md>
+   Model Caching with Fluid <guides/dynamo_deploy//model_caching_with_fluid.md>
 
 .. toctree::
    :hidden:

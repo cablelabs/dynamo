@@ -18,19 +18,19 @@ limitations under the License.
 
 # High Level Architecture
 
-Dynamo is high-throughput low-latency inference framework designed for serving generative AI and reasoning models in multi-node distributed environments. Designed to be inference engine agnostic (supports TRT-LLM, vLLM, SGLang or others), it captures LLM-specific capabilities such as:
+Dynamo is NVIDIA's high-throughput, low-latency inference framework that's designed to serve generative AI and reasoning models in multi-node distributed environments. It's inference engine agnostic, supporting TRT-LLM, vLLM, SGLang and others, while capturing essential LLM capabilities:
 
-- **Disaggregated prefill & decode inference** – Maximizes GPU throughput and facilitates trade off between throughput and latency.
-- **Dynamic GPU scheduling** – Optimizes performance based on fluctuating demand
-- **LLM-aware request routing** – Eliminates unnecessary KV cache re-computation
-- **Accelerated data transfer** – Reduces inference response time using NIXL.
-- **KV cache offloading** – Leverages multiple memory hierarchies for higher system throughput
+- **Disaggregated prefill & decode inference** – Maximizes GPU throughput and helps you balance throughput and latency
+- **Dynamic GPU scheduling** – Optimizes performance based on real-time demand
+- **LLM-aware request routing** – Eliminates unnecessary KV cache recomputation
+- **Accelerated data transfer** – Reduces inference response time using NIXL
+- **KV cache offloading** – Uses multiple memory hierarchies for higher system throughput
 
 Built in Rust for performance and in Python for extensibility, Dynamo is fully open-source and driven by a transparent, OSS (Open Source Software) first development approach
 
 ## Motivation behind Dynamo
 
-Scaling inference for generative AI and reasoning models are fundamentally hard problems—not just in terms of performance, but also in correctness and efficiency. Most inference serving frameworks struggle to handle the sheer complexity of large-scale distributed execution.
+Scaling inference for generative AI and reasoning models presents complex challenges in three key areas: performance, correctness, and efficiency. Here's what we're solving:
 
 There are multi-faceted challenges:
 
