@@ -128,7 +128,7 @@ and driven by a transparent, OSS (Open Source Software) first development approa
    :caption: Examples
 
    Hello World Example: Basic <examples/hello_world.md>
-   Hello World Example: Aggregated v Disaggregated Deployment <examples/disagg_skeleton>
+   Hello World Example: Aggregated and Disaggregated Deployment <examples/disagg_skeleton>
    LLM Deployment Examples <examples/llm_deployment.md>
    Multinode Examples <examples/multinode.md>
    LLM Deployment Examples using TensorRT-LLM <examples/trtllm.md>
