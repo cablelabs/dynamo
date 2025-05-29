@@ -96,7 +96,7 @@ impl KvScheduler {
         endpoints_rx: tokio::sync::watch::Receiver<ProcessedEndpoints>,
         selector: Option<Box<dyn WorkerSelector + Send + Sync>>,
     ) -> Result<Self, KvSchedulerError> {
-        let selector = selector.unwrap_or(Box::new(DefaultWorkerSelector));
+        let selector = selector.unwrap_or(Box::new(DefaultWorkerSelector::default()));
         let mut endpoints_rx = endpoints_rx;
         let mut endpoints: ProcessedEndpoints = endpoints_rx.borrow_and_update().clone();
 
@@ -231,8 +231,36 @@ pub fn process_worker_selection(
 }
 
 // Default implementation matching the Python _cost_function
-#[derive(Default)]
-pub struct DefaultWorkerSelector;
+#[derive(Debug, Clone)]
+pub struct DefaultWorkerSelector {
+    pub overlap_score_weight: f64,
+    pub gpu_cache_usage_weight: f64,
+    pub waiting_requests_weight: f64,
+}
+
+impl Default for DefaultWorkerSelector {
+    fn default() -> Self {
+        Self {
+            overlap_score_weight: 2.0,
+            gpu_cache_usage_weight: 1.0,
+            waiting_requests_weight: 1.0,
+        }
+    }
+}
+
+impl DefaultWorkerSelector {
+    pub fn new(
+        overlap_score_weight: Option<f64>,
+        gpu_cache_usage_weight: Option<f64>,
+        waiting_requests_weight: Option<f64>,
+    ) -> Self {
+        Self {
+            overlap_score_weight: overlap_score_weight.unwrap_or(2.0),
+            gpu_cache_usage_weight: gpu_cache_usage_weight.unwrap_or(1.0),
+            waiting_requests_weight: waiting_requests_weight.unwrap_or(1.0),
+        }
+    }
+}
 
 impl WorkerSelector for DefaultWorkerSelector {
     fn select_worker(
@@ -289,7 +317,10 @@ impl WorkerSelector for DefaultWorkerSelector {
             let logit = self.overlap_score_weight * score - self.gpu_cache_usage_weight * gpu_cache_usage - self.waiting_requests_weight * normalized_waiting;
 
             tracing::trace!(
-                "Formula for {worker_id}: {logit:.3} = {self.overlap_score_weight:.3} * {score:.3} - {self.gpu_cache_usage_weight:.3} * {gpu_cache_usage:.3} - {self.waiting_requests_weight:.3} * {normalized_waiting:.3}",
+                "Formula for {worker_id}: {logit:.3} = {:.1} * {score:.3} - {:.1} * {gpu_cache_usage:.3} - {:.1} * {normalized_waiting:.3}",
+                self.overlap_score_weight,
+                self.gpu_cache_usage_weight, 
+                self.waiting_requests_weight,
             );
 
             // Track best workers
