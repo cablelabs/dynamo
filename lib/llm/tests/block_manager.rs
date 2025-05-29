@@ -496,55 +496,18 @@ mod tests {
         (kvbm_component, rt)
     }
 
-    #[test]
-    fn test_dynamo_block_manager() {
-        // Check if we're already in a Tokio runtime context
-        let async_runtime = if tokio::runtime::Handle::try_current().is_ok() {
-            None // If we're already in a runtime, don't create a new one
-        } else {
-            // Only create a new runtime if not already in one
-            Some(Arc::new(tokio::runtime::Runtime::new().unwrap()))
-        };
-
-        let future = async {
-            let rt = Runtime::from_current().unwrap();
-            let dtr = DistributedRuntime::from_settings(rt.clone()).await.unwrap();
-            let namespace_name = "test_dynamo_block_manager".to_string();
-            let ns = dtr.namespace(namespace_name).unwrap();
-            let kvbm_component = KVBMDynamoRuntimeComponent::new(
-                dtr.clone(),
-                "kvbm_component".to_string(),
-                ns.clone(),
-                Duration::from_secs(10),
-                1, /*max_batch_size*/
-            );
-
-            let _manager = Arc::new(DynamoEventManager::new(kvbm_component.clone()));
-        };
-
-        // If we're already in a runtime, just run the future
-        if let Some(runtime) = async_runtime {
-            runtime.block_on(future);
-        } else {
-            // If we're already in a runtime context, we can just await the future
-            tokio::runtime::Handle::current().block_on(future);
-        }
-    }
-
     #[tokio::test]
     async fn test_dynamo_block_manager_async() {
-        let (kvbm_component, rt) = setup_kvbm_component(Duration::from_secs(10), 1).await;
-        let _manager = Arc::new(DynamoEventManager::new(kvbm_component.clone()));
-        rt.shutdown();
+        let _block_manager = create_dynamo_block_manager();
     }
 
-    #[tokio::test]
-    async fn test_create_dynamo_block_manager() {
+    #[test]
+    fn test_create_dynamo_block_manager() {
         let _block_manager = create_dynamo_block_manager();
     }
 
     #[tokio::test]
-    async fn test_dynamo_event_manager_drop_vec() {
+    async fn test_dynamo_event_manager_drop() {
         dynamo_runtime::logging::init();
         let sequence = create_sequence();
         let (kvbm_component, rt) = setup_kvbm_component(Duration::from_secs(10), 1).await;
@@ -608,12 +571,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_event_manager_drop_vec() {
+    async fn test_mock_event_manager_publisher_multiple_handles() {
         dynamo_runtime::logging::init();
         let sequence = create_sequence();
         let rt = Runtime::from_current().unwrap();
         let dtr = DistributedRuntime::from_settings(rt.clone()).await.unwrap();
-        let namespace_name = "test_event_manager_drop_vec".to_string();
+        let namespace_name = "test_event_manager_publisher".to_string();
         let ns = dtr.namespace(namespace_name).unwrap();
         let kvbm_component = KVBMDynamoRuntimeComponent::new(
             dtr.clone(),
@@ -868,7 +831,6 @@ mod tests {
         let msg = subscriber.next().await.unwrap();
         let received: Vec<RouterEvent> = serde_json::from_slice(&msg.payload).unwrap();
         assert_eq!(received.len(), 1, "Should receive remove event immediately");
-        println!("Received event: {:?}", received);
 
         drop(tx); // Close the channel
 
