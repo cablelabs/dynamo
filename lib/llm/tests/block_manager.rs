@@ -62,6 +62,9 @@ pub mod llm_kvbm {
         Remove(RouterEvent),
     }
 
+    // TODO[oandreeva] The potential issue with the start_batching_publisher
+    // same as with the worker task, it's potentially a slow subscriber.
+    // Needs to be perf tested and improved.
     pub async fn start_batching_publisher(
         component: Arc<KVBMDynamoRuntimeComponent>,
         mut rx: mpsc::Receiver<PublisherEvent>,
@@ -69,35 +72,54 @@ pub mod llm_kvbm {
         deadline: Duration,
     ) {
         let mut buffer: VecDeque<RouterEvent> = VecDeque::new();
-        let timer = sleep(deadline);
-        tokio::pin!(timer);
+        let mut interval = tokio::time::interval(deadline);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut timer_active = false;
 
         loop {
             tokio::select! {
                 // Deadline fired
-                _ = &mut timer, if !buffer.is_empty() => {
-                    let events: Vec<RouterEvent> = buffer.drain(..).collect();
-                    let _ = component.publish(KV_EVENT_SUBJECT, &events).await;
-                    timer.as_mut().reset(Instant::now() + deadline);
+                _ = interval.tick(), if timer_active => {
+                    if !buffer.is_empty() {
+                        let events: Vec<RouterEvent> = buffer.drain(..).collect();
+                        let _ = component.publish(KV_EVENT_SUBJECT, &events).await;
+                        timer_active = false;
+                    }
                 }
 
                 // New event received
                 maybe_evt = rx.recv() => {
                     match maybe_evt {
                         Some(PublisherEvent::Store(data)) => {
+                            let was_empty = buffer.is_empty();
                             buffer.push_back(data);
+
+                            // Start timer when buffer transitions from empty to non-empty
+                            if was_empty {
+                                interval.reset();
+                                timer_active = true;
+                            }
+
                             if buffer.len() >= max_batch_size {
                                 let events: Vec<RouterEvent> = buffer.drain(..).collect();
                                 let _ = component.publish(KV_EVENT_SUBJECT, &events).await;
-                                timer.as_mut().reset(Instant::now() + deadline);
+                                timer_active = false;
                             }
                         }
                         Some(PublisherEvent::Remove(data)) => {
+                            let was_empty = buffer.is_empty();
                             buffer.push_back(data);
+
+                            // Start timer when buffer transitions from empty to non-empty
+                            if was_empty {
+                                interval.reset();
+                                timer_active = true;
+                            }
+
                             // On remove, always flush immediately
                             let events: Vec<RouterEvent> = buffer.drain(..).collect();
                             let _ = component.publish(KV_EVENT_SUBJECT, &events).await;
-                            timer.as_mut().reset(Instant::now() + deadline);
+                            timer_active = false;
                         }
                         None => {
                             // Channel closed, flush remaining
@@ -140,7 +162,7 @@ pub mod llm_kvbm {
             deadline: Duration,
             max_batch_size: usize,
         ) -> Arc<Self> {
-            let (tx, rx) = mpsc::channel(2048);
+            let (tx, rx) = mpsc::unbounded_channel();
 
             let component = Arc::new(Self {
                 drt,
@@ -150,8 +172,8 @@ pub mod llm_kvbm {
             });
 
             let batching_component = Arc::clone(&component);
-            batching_component
-                .drt
+            component
+                .drt()
                 .runtime()
                 .secondary()
                 .spawn(async move {
@@ -229,8 +251,12 @@ pub mod llm_kvbm {
     impl DynamoKvbmRuntimeConfigBuilder {
         pub fn build(self) -> Result<kvbm::config::KvManagerRuntimeConfig> {
             let (runtime, nixl) = self.build_internal()?.dissolve();
+            let worker_id = runtime
+                .primary_lease()
+                .ok_or_else(|| anyhow::anyhow!("Runtime is not the primary lease holder"))?
+                .id() as u64;
             Ok(kvbm::config::KvManagerRuntimeConfig::builder()
-                .worker_id(runtime.primary_lease().unwrap().id() as u64)
+                .worker_id(worker_id)
                 .cancellation_token(runtime.primary_token().child_token())
                 .nixl(nixl)
                 .build()?)
@@ -260,9 +286,12 @@ pub mod llm_kvbm {
     impl DynamoEventManager {
         pub fn new(component: Arc<KVBMDynamoRuntimeComponent>) -> Self {
             let (tx, rx) = mpsc::unbounded_channel();
-            let event_id_counter = Arc::new(AtomicU64::new(0));
-            let worker_identifier = component.drt().primary_lease().unwrap().id() as u64;
-            worker_task(component, rx, event_id_counter.clone());
+            let worker_id = component
+                .drt()
+                .primary_lease()
+                .ok_or_else(|| anyhow::anyhow!("Runtime is not the primary lease holder"))?
+                .id() as u64;
+            worker_task(component, rx);
             Self {
                 tx,
                 worker_identifier,
@@ -272,69 +301,72 @@ pub mod llm_kvbm {
         pub fn publisher(self: &Arc<Self>) -> Publisher {
             Publisher::new(self.clone())
         }
-    }
 
-    // Worker task to receive and process messages
-    pub fn worker_task(
-        component: Arc<KVBMDynamoRuntimeComponent>,
-        mut rx: mpsc::UnboundedReceiver<Event>,
-        event_id_counter: Arc<AtomicU64>,
-    ) {
-        let component_clone = component.clone();
-        _ = component.drt().runtime().secondary().spawn(async move {
-            while let Some(event) = rx.recv().await {
-                let event_id = event_id_counter.fetch_add(1, Ordering::SeqCst);
-                match event {
-                    Event::RegisterMultiple {
-                        blocks,
-                        worker_identifier,
-                    } => {
-                        let parent_hash = blocks.first().and_then(|(_, _, parent)| *parent);
-                        let store_data = KvCacheStoreData {
-                            blocks: blocks
-                                .iter()
-                                .map(|(sequence_hash, block_hash, _parent_sequence_hash)| {
-                                    KvCacheStoredBlockData {
-                                        block_hash: ExternalSequenceBlockHash(*sequence_hash),
-                                        tokens_hash: LocalBlockHash(*block_hash),
-                                    }
-                                })
-                                .collect(),
-                            parent_hash: parent_hash.map(ExternalSequenceBlockHash),
-                        };
-                        let data = KvCacheEventData::Stored(store_data);
-                        let event = KvCacheEvent { event_id, data };
-                        let router_event = RouterEvent::new(worker_identifier as i64, event);
-                        if let Err(e) = component_clone
-                            .batch_tx
-                            .send(PublisherEvent::Store(router_event))
-                            .await
-                        {
-                            tracing::warn!("Failed to send event to batch channel: {:?}", e);
+        // Worker task to receive and process messages
+        // TODO[oandreeva] The potential issue with the worker task
+        // being a slow subscriber. Needs to be perf tested and improved.
+        pub fn worker_task(
+            component: Arc<KVBMDynamoRuntimeComponent>,
+            mut rx: mpsc::UnboundedReceiver<Event>,
+        ) {
+            let mut event_id_counter = 0;
+            let component_clone = component.clone();
+            _ = component.drt().runtime().secondary().spawn(async move {
+                while let Some(event) = rx.recv().await {
+                    let event_id = event_id_counter;
+                    event_id_counter += 1;
+                    match event {
+                        Event::RegisterMultiple {
+                            blocks,
+                            worker_identifier,
+                        } => {
+                            let parent_hash = blocks.first().and_then(|(_, _, parent)| *parent);
+                            let store_data = KvCacheStoreData {
+                                blocks: blocks
+                                    .iter()
+                                    .map(|(sequence_hash, block_hash, _parent_sequence_hash)| {
+                                        KvCacheStoredBlockData {
+                                            block_hash: ExternalSequenceBlockHash(*sequence_hash),
+                                            tokens_hash: LocalBlockHash(*block_hash),
+                                        }
+                                    })
+                                    .collect(),
+                                parent_hash: parent_hash.map(ExternalSequenceBlockHash),
+                            };
+                            let data = KvCacheEventData::Stored(store_data);
+                            let event = KvCacheEvent { event_id, data };
+                            let router_event = RouterEvent::new(worker_identifier as i64, event);
+                            if let Err(e) = component_clone
+                                .batch_tx
+                                .send(PublisherEvent::Store(router_event))
+                                .await
+                            {
+                                tracing::warn!("Failed to send event to batch channel: {:?}", e);
+                            }
                         }
-                    }
-                    Event::Release {
-                        sequence_hash,
-                        worker_identifier,
-                    } => {
-                        let event = KvCacheEvent {
-                            event_id,
-                            data: KvCacheEventData::Removed(KvCacheRemoveData {
-                                block_hashes: vec![ExternalSequenceBlockHash(sequence_hash)],
-                            }),
-                        };
-                        let router_event = RouterEvent::new(worker_identifier as i64, event);
-                        if let Err(e) = component_clone
-                            .batch_tx
-                            .send(PublisherEvent::Remove(router_event))
-                            .await
-                        {
-                            tracing::warn!("Failed to send event to batch channel: {:?}", e);
+                        Event::Release {
+                            sequence_hash,
+                            worker_identifier,
+                        } => {
+                            let event = KvCacheEvent {
+                                event_id,
+                                data: KvCacheEventData::Removed(KvCacheRemoveData {
+                                    block_hashes: vec![ExternalSequenceBlockHash(sequence_hash)],
+                                }),
+                            };
+                            let router_event = RouterEvent::new(worker_identifier as i64, event);
+                            if let Err(e) = component_clone
+                                .batch_tx
+                                .send(PublisherEvent::Remove(router_event))
+                                .await
+                            {
+                                tracing::warn!("Failed to send event to batch channel: {:?}", e);
+                            }
                         }
                     }
                 }
-            }
-        });
+            });
+        }
     }
 
     impl EventManager for DynamoEventManager {}
@@ -498,12 +530,27 @@ mod tests {
 
     #[tokio::test]
     async fn test_dynamo_block_manager_async() {
-        let _block_manager = create_dynamo_block_manager();
+        let _block_manager = create_dynamo_block_manager().await;
     }
 
     #[test]
     fn test_create_dynamo_block_manager() {
-        let _block_manager = create_dynamo_block_manager();
+        // Create a runtime for the test
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        // Run the async function in the runtime
+        let block_manager = rt.block_on(async {
+            create_dynamo_block_manager().await
+        });
+
+        // Verify the block manager was created successfully
+        assert!(block_manager.is_some(), "Block manager should be created successfully");
+
+        // Clean up
+        rt.shutdown();
     }
 
     #[tokio::test]
