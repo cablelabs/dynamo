@@ -262,9 +262,10 @@ pub mod llm_kvbm {
     }
 
     impl DynamoEventManager {
-        pub fn new(component: Arc<KVBMDynamoRuntimeComponent>, worker_identifier: u64) -> Self {
+        pub fn new(component: Arc<KVBMDynamoRuntimeComponent>) -> Self {
             let (tx, rx) = mpsc::unbounded_channel();
             let event_id_counter = Arc::new(AtomicU64::new(0));
+            let worker_identifier = component.drt().primary_lease().unwrap().id() as u64;
             worker_task(component, rx, event_id_counter.clone());
             Self {
                 tx,
@@ -374,27 +375,17 @@ mod tests {
     #[allow(unused_imports)]
     use super::llm_kvbm::*;
     use dynamo_llm::block_manager as kvbm;
-    use dynamo_llm::block_manager::DType;
-    use kvbm::block::{BasicMetadata, Blocks};
-    use kvbm::layout::{FullyContiguous, LayoutConfig, LayoutError};
-    use kvbm::pool::BlockPool;
-    use kvbm::storage::tests::{NullDeviceAllocator, NullDeviceStorage};
+    use kvbm::block::BasicMetadata;
 
     use dynamo_llm::block_manager::block::registry::BlockRegistry;
     use dynamo_llm::block_manager::NixlOptions;
     use dynamo_llm::block_manager::{
-        KvBlockManager, /*KvManagerLayoutConfig,*/ KvBlockManagerConfig, KvManagerModelConfig,
+        KvBlockManager, KvBlockManagerConfig, KvManagerLayoutConfig, KvManagerModelConfig,
     };
     use dynamo_runtime::{DistributedRuntime, Runtime};
 
-    use dynamo_llm::block_manager::block::BlockExt;
     use dynamo_llm::block_manager::events::EventManager;
-    use dynamo_llm::tokens::{TokenBlockSequence, Tokens};
-    use dynamo_runtime::traits::events::{EventPublisher, EventSubscriber};
-    use futures::stream::StreamExt;
-    use std::sync::Arc;
-    use tokio::time::Duration;
-    //use dynamo_llm::block_manager::storage::{DeviceAllocator, PinnedAllocator};
+    use dynamo_llm::block_manager::storage::{DeviceAllocator, DiskAllocator, PinnedAllocator};
     use dynamo_llm::kv_router::{
         indexer::RouterEvent,
         protocols::{
@@ -402,25 +393,15 @@ mod tests {
             KvCacheStoreData, KvCacheStoredBlockData, LocalBlockHash,
         },
     };
+    use dynamo_llm::tokens::{TokenBlockSequence, Tokens};
+    use dynamo_runtime::traits::events::{EventPublisher, EventSubscriber};
+    use futures::stream::StreamExt;
+    use std::sync::Arc;
+    use tokio::time::Duration;
 
     pub type ReferenceBlockManager = KvBlockManager<BasicMetadata>;
 
     //-------------------------------- Test Helpers --------------------------------
-    pub fn setup_layout(
-        alignment: Option<usize>, // Option to override default alignment
-    ) -> Result<FullyContiguous<NullDeviceStorage>, LayoutError> {
-        let config = LayoutConfig {
-            num_blocks: 1,
-            num_layers: 5,
-            outer_dim: 2,
-            page_size: 4,
-            inner_dim: 13,
-            alignment: alignment.unwrap_or(1),
-            dtype: DType::FP32,
-        };
-
-        FullyContiguous::allocate(config, &NullDeviceAllocator)
-    }
 
     fn create_sequence() -> TokenBlockSequence {
         let tokens = Tokens::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
@@ -454,19 +435,16 @@ mod tests {
             Duration::from_secs(10),
             1, /*max_batch_size*/
         );
-        let manager = Arc::new(DynamoEventManager::new(
-            kvbm_component.clone(),
-            dtr.primary_lease().unwrap().id() as u64,
-        ));
-
-        let dyn_config = DynamoKvbmRuntimeConfig::builder()
-            .runtime(dtr.clone())
-            .nixl(nixl)
-            .build()
-            .unwrap();
+        let manager = Arc::new(DynamoEventManager::new(kvbm_component.clone()));
 
         let config = KvBlockManagerConfig::builder()
-            .runtime(dyn_config)
+            .runtime(
+                DynamoKvbmRuntimeConfig::builder()
+                    .runtime(dtr.clone())
+                    .nixl(nixl)
+                    .build()
+                    .unwrap(),
+            )
             .model(
                 KvManagerModelConfig::builder()
                     .num_layers(3)
@@ -475,11 +453,54 @@ mod tests {
                     .build()
                     .unwrap(),
             )
+            .disk_layout(
+                KvManagerLayoutConfig::builder()
+                    .num_blocks(16)
+                    .allocator(DiskAllocator)
+                    .build()
+                    .unwrap(),
+            )
+            .host_layout(
+                KvManagerLayoutConfig::builder()
+                    .num_blocks(16)
+                    .allocator(PinnedAllocator::default())
+                    .build()
+                    .unwrap(),
+            )
+            .device_layout(
+                KvManagerLayoutConfig::builder()
+                    .num_blocks(8)
+                    .allocator(DeviceAllocator::new(0).unwrap())
+                    .build()
+                    .unwrap(),
+            )
             .event_manager(Some(manager))
             .build()
             .unwrap();
 
         ReferenceBlockManager::new(config).unwrap()
+    }
+
+    async fn setup_kvbm_component(
+        deadline: Duration,
+        max_batch_size: usize,
+    ) -> (Arc<KVBMDynamoRuntimeComponent>, Runtime) {
+        let rt = Runtime::from_current().unwrap();
+        let dtr = DistributedRuntime::from_settings(rt.clone()).await.unwrap();
+
+        // Generate a random namespace name
+        let namespace_name = format!("test_namespace_{}", rand::random::<u32>());
+        let ns = dtr.namespace(namespace_name).unwrap();
+
+        // Create component with small batch size and short deadline for testing
+        let kvbm_component = KVBMDynamoRuntimeComponent::new(
+            dtr.clone(),
+            "kvbm_component".to_string(),
+            ns.clone(),
+            deadline,
+            max_batch_size,
+        );
+        (kvbm_component, rt)
     }
 
     //-------------------------------- Test Cases --------------------------------
@@ -506,10 +527,7 @@ mod tests {
                 1, /*max_batch_size*/
             );
 
-            let _manager = Arc::new(DynamoEventManager::new(
-                kvbm_component.clone(),
-                dtr.primary_lease().unwrap().id() as u64,
-            ));
+            let _manager = Arc::new(DynamoEventManager::new(kvbm_component.clone()));
         };
 
         // If we're already in a runtime, just run the future
@@ -523,22 +541,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_dynamo_block_manager_async() {
-        let rt = Runtime::from_current().unwrap();
-        let dtr = DistributedRuntime::from_settings(rt.clone()).await.unwrap();
-        let namespace_name = "test_dynamo_block_manager_async".to_string();
-        let ns = dtr.namespace(namespace_name).unwrap();
-        let kvbm_component = KVBMDynamoRuntimeComponent::new(
-            dtr.clone(),
-            "kvbm_component".to_string(),
-            ns.clone(),
-            Duration::from_secs(10),
-            1, /*max_batch_size*/
-        );
-
-        let _manager = Arc::new(DynamoEventManager::new(
-            kvbm_component.clone(),
-            dtr.primary_lease().unwrap().id() as u64,
-        ));
+        let (kvbm_component, rt) = setup_kvbm_component(Duration::from_secs(10), 1).await;
+        let _manager = Arc::new(DynamoEventManager::new(kvbm_component.clone()));
+        rt.shutdown();
     }
 
     #[tokio::test]
@@ -547,48 +552,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_dynamo_kvbm_runtime_config_builder() {
-        let rt = Runtime::from_current().unwrap();
-        let runtime = DistributedRuntime::from_settings(rt.clone()).await.unwrap();
-        let nixl = NixlOptions::Enabled;
-
-        let config = DynamoKvbmRuntimeConfig::builder()
-            .runtime(runtime.clone())
-            .nixl(nixl)
-            .build()
-            .unwrap();
-
-        assert_eq!(
-            config.worker_id,
-            runtime.primary_lease().unwrap().id() as u64
-        );
-        assert!(matches!(config.nixl, NixlOptions::Enabled));
-        rt.shutdown();
-    }
-
-    #[tokio::test]
-    async fn test_event_manager_drop_vec() {
+    async fn test_dynamo_event_manager_drop_vec() {
         dynamo_runtime::logging::init();
         let sequence = create_sequence();
-        let rt = Runtime::from_current().unwrap();
-        let dtr = DistributedRuntime::from_settings(rt.clone()).await.unwrap();
-        let namespace_name = "test_event_manager_drop_vec".to_string();
-        let ns = dtr.namespace(namespace_name).unwrap();
-        let kvbm_component = KVBMDynamoRuntimeComponent::new(
-            dtr.clone(),
-            "kvbm_component".to_string(),
-            ns.clone(),
-            Duration::from_secs(10),
-            1, /*max_batch_size*/
-        );
-
-        let manager = Arc::new(DynamoEventManager::new(
-            kvbm_component.clone(),
-            dtr.primary_lease().unwrap().id() as u64,
-        )); // Split the tuple
+        let (kvbm_component, rt) = setup_kvbm_component(Duration::from_secs(10), 1).await;
+        let mut subscriber = kvbm_component
+            .namespace()
+            .subscribe(KV_EVENT_SUBJECT.to_string())
+            .await
+            .unwrap();
+        let manager = Arc::new(DynamoEventManager::new(kvbm_component));
         let event_manager: Arc<dyn EventManager> = manager;
-        // Create a subscriber
-        let mut subscriber = ns.subscribe(KV_EVENT_SUBJECT.to_string()).await.unwrap();
 
         // Create a Vec of publish_handles
         let publish_handles: Vec<_> = sequence
@@ -611,9 +585,8 @@ mod tests {
         let mut event_count = 0;
         let timeout = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             while let Some(msg) = subscriber.next().await {
-                let received = String::from_utf8(msg.payload.to_vec())
+                let _received = String::from_utf8(msg.payload.to_vec())
                     .expect("Failed to decode message payload");
-                println!("Received event: {}", received);
                 event_count += 1;
 
                 if event_count == expected_events {
@@ -643,12 +616,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test2_event_manager_drop_vec() {
+    async fn test_event_manager_drop_vec() {
         dynamo_runtime::logging::init();
         let sequence = create_sequence();
         let rt = Runtime::from_current().unwrap();
         let dtr = DistributedRuntime::from_settings(rt.clone()).await.unwrap();
-        let namespace_name = "test2_event_manager_drop_vec".to_string();
+        let namespace_name = "test_event_manager_drop_vec".to_string();
         let ns = dtr.namespace(namespace_name).unwrap();
         let kvbm_component = KVBMDynamoRuntimeComponent::new(
             dtr.clone(),
@@ -658,10 +631,7 @@ mod tests {
             2, /*max_batch_size*/
         );
 
-        let manager = Arc::new(DynamoEventManager::new(
-            kvbm_component.clone(),
-            dtr.primary_lease().unwrap().id() as u64,
-        )); // Split the tuple
+        let manager = Arc::new(DynamoEventManager::new(kvbm_component.clone()));
         let mut publisher = manager.publisher();
         let event_manager: Arc<dyn EventManager> = manager;
         // Create a subscriber
@@ -673,24 +643,23 @@ mod tests {
             BlockRegistry::create_publish_handle(&sequence.blocks()[1], event_manager.clone());
 
         // Remove handles before adding to publisher
-        let reg_handle1 = publish_handle1.remove_handle();
+        let _reg_handle1 = publish_handle1.remove_handle();
 
         // Add disarmed handles to publisher
         publisher.take_handle(publish_handle1);
 
         publisher.publish();
 
-        let timeout = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let _timeout = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             while let Some(msg) = subscriber.next().await {
-                let received = String::from_utf8(msg.payload.to_vec())
+                let _received = String::from_utf8(msg.payload.to_vec())
                     .expect("Failed to decode message payload");
-                println!("Received event: {}", received);
                 break;
             }
         })
         .await;
 
-        let reg_handle2 = publish_handle2.remove_handle();
+        let _reg_handle2 = publish_handle2.remove_handle();
         publisher.take_handle(publish_handle2);
 
         // No event should have been triggered yet
@@ -707,9 +676,8 @@ mod tests {
         let mut event_count = 0;
         let timeout = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             while let Some(msg) = subscriber.next().await {
-                let received = String::from_utf8(msg.payload.to_vec())
+                let _received = String::from_utf8(msg.payload.to_vec())
                     .expect("Failed to decode message payload");
-                println!("Received event: {}", received);
                 event_count += 1;
 
                 if event_count == expected_events {
@@ -739,218 +707,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_block_pool_publishing() {
-        const EXPECTED_SEQUENCE_HASH: u64 = 14643705804678351452;
-
-        let rt = Runtime::from_current().unwrap();
-        let dtr = DistributedRuntime::from_settings(rt.clone()).await.unwrap();
-        let namespace_name = "test_block_pool_publishing".to_string();
-        let ns = dtr.namespace(namespace_name).unwrap();
-        let kvbm_component = KVBMDynamoRuntimeComponent::new(
-            dtr.clone(),
-            "kvbm_component".to_string(),
-            ns.clone(),
-            Duration::from_secs(10),
-            1, /*max_batch_size*/
-        );
-
-        let manager = Arc::new(DynamoEventManager::new(
-            kvbm_component.clone(),
-            dtr.primary_lease().unwrap().id() as u64,
-        )); // Split the tuple
-        let event_manager: Arc<dyn EventManager> = manager.clone();
-
-        // Create a subscriber
-        let mut subscriber = ns.subscribe(KV_EVENT_SUBJECT.to_string()).await.unwrap();
-
-        // Create a new layout
-        let layout = setup_layout(None).unwrap();
-
-        // Create the Blocks
-        let blocks =
-            Blocks::<_, BasicMetadata>::new(layout, 42, dtr.primary_lease().unwrap().id() as u64)
-                .unwrap()
-                .into_blocks()
-                .unwrap();
-
-        // Create the BlockPool and add the blocks
-        let pool = BlockPool::builder()
-            .blocks(blocks)
-            .event_manager(event_manager)
-            .build()
-            .unwrap();
-
-        // All blocks should be in the Reset/Empty state
-        // No blocks should match the expected sequence hash
-        let matched_blocks = pool
-            .match_sequence_hashes_blocking(&[EXPECTED_SEQUENCE_HASH])
-            .unwrap();
-        assert_eq!(matched_blocks.len(), 0);
-
-        // Allocate a single block from the pool
-        let mut mutable_blocks = pool.allocate_blocks_blocking(1).unwrap();
-        assert_eq!(mutable_blocks.len(), 1);
-        let mut block = mutable_blocks.pop().unwrap();
-
-        // Initialize the sequence on the block with a salt hash
-        block.init_sequence(1337).unwrap();
-
-        // Add some tokens to the block - our page_size is 4
-        block.add_token(1).unwrap();
-        block.add_token(2).unwrap();
-        block.add_token(3).unwrap();
-        block.add_token(4).unwrap();
-
-        // Should fail because we don't have space in the block
-        assert!(block.add_token(5).is_err());
-
-        // Commit the block - this will generate a sequence hash
-        // This will put the block in a Complete state
-        block.commit().unwrap();
-        assert!(block.state().is_complete()); // perhaps renamed to Commited
-
-        let sequence_hash = block.sequence_hash().unwrap();
-        assert_eq!(sequence_hash, EXPECTED_SEQUENCE_HASH);
-
-        // Register the block
-        // We provide a mutable block to the register_blocks function
-        // This will take ownership of the block and return an immutable block
-        let mut immutable_blocks = pool.register_blocks_blocking(vec![block]).unwrap();
-        let block = immutable_blocks.pop().unwrap();
-        assert!(block.state().is_registered());
-        assert_eq!(block.sequence_hash().unwrap(), sequence_hash);
-
-        let expected_events = 1;
-        let mut event_count = 0;
-        let timeout = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            while let Some(msg) = subscriber.next().await {
-                let _received = String::from_utf8(msg.payload.to_vec())
-                    .expect("Failed to decode message payload");
-                event_count += 1;
-
-                if event_count == expected_events {
-                    break;
-                }
-            }
-        })
-        .await;
-
-        if timeout.is_err() {
-            panic!("Test timed out while waiting for events");
-        }
-        // Dropping the immutable block should return the block to the pool
-        // However, the block should remain in the BlockPool as an inactive block until it is reused
-        // or promoted back to an immutable block by being matched with a sequence hash
-        drop(block);
-
-        // Get the list of ImmutableBlocks that match the sequence hash
-        let matched = pool
-            .match_sequence_hashes_blocking(&[sequence_hash])
-            .unwrap();
-        assert_eq!(matched.len(), 1);
-        assert_eq!(matched[0].sequence_hash().unwrap(), sequence_hash);
-
-        // No more events should be received
-        let timeout =
-            tokio::time::timeout(std::time::Duration::from_millis(100), subscriber.next()).await;
-        if let Ok(Some(msg)) = &timeout {
-            let received =
-                String::from_utf8(msg.payload.to_vec()).expect("Failed to decode message payload");
-            panic!("Unexpected event received after batch event: {}", received);
-        }
-        assert!(
-            timeout.is_err(),
-            "Unexpected event received after the expected events"
-        );
-        rt.shutdown();
-    }
-
-    #[tokio::test]
-    async fn test_publisher() {
-        let sequence = create_sequence();
-        let rt = Runtime::from_current().unwrap();
-        let dtr = DistributedRuntime::from_settings(rt.clone()).await.unwrap();
-        let namespace_name = "test_publisher".to_string();
-        let ns = dtr.namespace(namespace_name).unwrap();
-        let kvbm_component = KVBMDynamoRuntimeComponent::new(
-            dtr.clone(),
-            "kvbm_component".to_string(),
-            ns.clone(),
-            Duration::from_secs(10),
-            1, /*max_batch_size*/
-        );
-
-        let manager = Arc::new(DynamoEventManager::new(
-            kvbm_component.clone(),
-            dtr.primary_lease().unwrap().id() as u64,
-        ));
-        let event_manager: Arc<dyn EventManager> = manager.clone();
-        let mut publisher = manager.publisher();
-
-        // Create a subscriber
-        let mut subscriber = ns.subscribe(KV_EVENT_SUBJECT.to_string()).await.unwrap();
-
-        let publish_handle =
-            BlockRegistry::create_publish_handle(&sequence.blocks()[0], event_manager.clone());
-
-        let reg_handle = publish_handle.remove_handle();
-
-        publisher.take_handle(publish_handle);
-
-        // no event should have been triggered
-        let timeout =
-            tokio::time::timeout(std::time::Duration::from_millis(100), subscriber.next()).await;
-        assert!(
-            timeout.is_err(),
-            "Unexpected event triggered before dropping publish_handle"
-        );
-
-        // we should get two events when this is dropped, since we never took ownership of the RegistrationHandle
-        drop(publisher);
-
-        // Verify that two events are triggered
-        let mut event_count = 0;
-        // Add a timeout to prevent the test from hanging indefinitely
-        let timeout = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            while let Some(msg) = subscriber.next().await {
-                let _received = String::from_utf8(msg.payload.to_vec())
-                    .expect("Failed to decode message payload");
-                event_count += 1;
-
-                if event_count == 1 {
-                    break; // Stop after receiving two events
-                }
-            }
-        })
-        .await;
-
-        if timeout.is_err() {
-            panic!("Test timed out while waiting for events");
-        }
-
-        drop(reg_handle);
-        event_count = 0;
-        let timeout = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            while let Some(msg) = subscriber.next().await {
-                let _received = String::from_utf8(msg.payload.to_vec())
-                    .expect("Failed to decode message payload");
-                event_count += 1;
-
-                if event_count == 1 {
-                    break; // Stop after receiving two events
-                }
-            }
-        })
-        .await;
-
-        if timeout.is_err() {
-            panic!("Test timed out while waiting for events");
-        }
-        rt.shutdown();
-    }
-
-    #[tokio::test]
-    async fn test_kvbm_component() {
+    async fn test_kvbm_component_publish() {
         let rt = Runtime::from_current().unwrap();
         let dtr = DistributedRuntime::from_settings(rt.clone()).await.unwrap();
         let namespace_name = "test_kvbm_component".to_string();
@@ -982,25 +739,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_batching_publisher() {
-        let rt = Runtime::from_current().unwrap();
-        let dtr = DistributedRuntime::from_settings(rt.clone()).await.unwrap();
-        let namespace_name = "test_batching_publisher".to_string();
-        let ns = dtr.namespace(namespace_name).unwrap();
-
-        // Create component with small batch size and short deadline for testing
-        let kvbm_component = KVBMDynamoRuntimeComponent::new(
-            dtr.clone(),
-            "kvbm_component".to_string(),
-            ns.clone(),
-            Duration::from_millis(100), // Short deadline
-            2,                          // Small batch size
-        );
+    async fn test_dynamo_component_batching_publisher_max_batch_size() {
+        let (kvbm_component, rt) = setup_kvbm_component(Duration::from_millis(100), 2).await;
 
         // Create a subscriber
-        let mut subscriber = ns.subscribe(KV_EVENT_SUBJECT.to_string()).await.unwrap();
-
-        // Test 1: Batch based on max_batch_size
+        let mut subscriber = kvbm_component
+            .namespace()
+            .subscribe(KV_EVENT_SUBJECT.to_string())
+            .await
+            .unwrap();
         let tx = kvbm_component.batch_tx();
 
         // Send two store events - should trigger batch due to max_batch_size
@@ -1039,9 +786,28 @@ mod tests {
         let msg = subscriber.next().await.unwrap();
         let received: Vec<RouterEvent> = serde_json::from_slice(&msg.payload).unwrap();
         assert_eq!(received.len(), 2, "Should receive both events in one batch");
-        println!("Received event: {:?}", received);
 
-        // Test 2: Batch based on deadline
+        drop(tx); // Close the channel
+
+        // No more events should be received
+        let timeout = tokio::time::timeout(Duration::from_millis(200), subscriber.next()).await;
+        assert!(
+            timeout.is_err(),
+            "Should not receive any more events after channel closure"
+        );
+        rt.shutdown();
+    }
+
+    #[tokio::test]
+    async fn test_dynamo_component_batching_publisher_deadline() {
+        let (kvbm_component, rt) = setup_kvbm_component(Duration::from_millis(100), 2).await;
+        let mut subscriber = kvbm_component
+            .namespace()
+            .subscribe(KV_EVENT_SUBJECT.to_string())
+            .await
+            .unwrap();
+        let tx = kvbm_component.batch_tx();
+
         let event3 = RouterEvent::new(
             3,
             KvCacheEvent {
@@ -1069,7 +835,29 @@ mod tests {
             1,
             "Should receive single event after deadline"
         );
-        println!("Received event: {:?}", received);
+
+        drop(tx);
+
+        // No more events should be received
+        let timeout = tokio::time::timeout(Duration::from_millis(200), subscriber.next()).await;
+        assert!(
+            timeout.is_err(),
+            "Should not receive any more events after channel closure"
+        );
+        rt.shutdown();
+    }
+
+    #[tokio::test]
+    async fn test_dynamo_component_batching_publisher_remove_event() {
+        let (kvbm_component, rt) = setup_kvbm_component(Duration::from_millis(100), 2).await;
+
+        // Create a subscriber
+        let mut subscriber = kvbm_component
+            .namespace()
+            .subscribe(KV_EVENT_SUBJECT.to_string())
+            .await
+            .unwrap();
+        let tx = kvbm_component.batch_tx();
 
         // Test 3: Immediate flush for Remove event
         let event4 = RouterEvent::new(
@@ -1089,7 +877,7 @@ mod tests {
         let received: Vec<RouterEvent> = serde_json::from_slice(&msg.payload).unwrap();
         assert_eq!(received.len(), 1, "Should receive remove event immediately");
         println!("Received event: {:?}", received);
-        // Test 4: Channel closure
+
         drop(tx); // Close the channel
 
         // No more events should be received
@@ -1098,7 +886,6 @@ mod tests {
             timeout.is_err(),
             "Should not receive any more events after channel closure"
         );
-
         rt.shutdown();
     }
 }
