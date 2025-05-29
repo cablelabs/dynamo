@@ -138,7 +138,7 @@ class ServiceInfo(BaseModel):
         config = ServiceConfig(
             name=name,
             service="",
-            resource=service.config.resource.model_dump(),
+            resource=service.config.resources.model_dump(),
             workers=service.config.workers,
             image=image,
             dynamo=service.config.dynamo.model_dump(),
