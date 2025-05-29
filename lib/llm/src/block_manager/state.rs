@@ -78,7 +78,10 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<Metadata> {
         let mut nixl_backends: HashMap<String, Arc<nixl_sys::Backend>> = HashMap::new();
 
         let global_registry = GlobalRegistry::default();
-        let event_manager = config.event_manager.clone().unwrap_or_else(|| NullEventManager::new());
+        let event_manager = config
+            .event_manager
+            .clone()
+            .unwrap_or_else(|| NullEventManager::new());
 
         // Create a NIXL agent if NIXL is enabled and instantiate requested backends
         // TODO: Build a map of NIXL backends to block pools/sets
@@ -502,8 +505,7 @@ fn create_block_pool<S: Storage + NixlRegisterableStorage, M: BlockMetadata>(
     event_manager: Option<Arc<dyn EventManager>>,
 ) -> Result<(BlockPool<S, M>, Vec<Block<S, M>>)> {
     let blocks = block::layout_to_blocks::<_, M>(layout, block_set_idx, worker_id)?;
-    let event_manager = event_manager
-        .unwrap_or_else(|| NullEventManager::new());
+    let event_manager = event_manager.unwrap_or_else(|| NullEventManager::new());
     let pool = BlockPool::<S, M>::builder()
         .cancel_token(cancellation_token)
         .global_registry(global_registry)

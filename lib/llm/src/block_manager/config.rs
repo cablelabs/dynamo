@@ -13,8 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::*;
 use super::events::EventManager;
+use super::*;
 
 #[derive(Debug, Clone)]
 pub enum NixlOptions {

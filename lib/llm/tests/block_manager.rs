@@ -306,10 +306,7 @@ pub mod llm_kvbm {
                             parent_hash: parent_hash.map(ExternalSequenceBlockHash),
                         };
                         let data = KvCacheEventData::Stored(store_data);
-                        let event = KvCacheEvent {
-                            event_id,
-                            data,
-                        };
+                        let event = KvCacheEvent { event_id, data };
                         let router_event = RouterEvent::new(worker_identifier as i64, event);
                         if let Err(e) = component_clone
                             .batch_tx
