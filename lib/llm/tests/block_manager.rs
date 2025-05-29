@@ -71,7 +71,7 @@ pub mod llm_kvbm {
         deadline: Duration,
     ) {
         let mut buffer: VecDeque<RouterEvent> = VecDeque::new();
-        let mut timer = sleep(deadline);
+        let timer = sleep(deadline);
         tokio::pin!(timer);
 
         loop {
@@ -79,7 +79,7 @@ pub mod llm_kvbm {
                 // Deadline fired
                 _ = &mut timer, if !buffer.is_empty() => {
                     let events: Vec<RouterEvent> = buffer.drain(..).collect();
-                    let _ = component.publish(&KV_EVENT_SUBJECT, &events).await;
+                    let _ = component.publish(KV_EVENT_SUBJECT, &events).await;
                     timer.as_mut().reset(Instant::now() + deadline);
                 }
 
@@ -90,7 +90,7 @@ pub mod llm_kvbm {
                             buffer.push_back(data);
                             if buffer.len() >= max_batch_size {
                                 let events: Vec<RouterEvent> = buffer.drain(..).collect();
-                                let _ = component.publish(&KV_EVENT_SUBJECT, &events).await;
+                                let _ = component.publish(KV_EVENT_SUBJECT, &events).await;
                                 timer.as_mut().reset(Instant::now() + deadline);
                             }
                         }
@@ -98,14 +98,14 @@ pub mod llm_kvbm {
                             buffer.push_back(data);
                             // On remove, always flush immediately
                             let events: Vec<RouterEvent> = buffer.drain(..).collect();
-                            let _ = component.publish(&KV_EVENT_SUBJECT, &events).await;
+                            let _ = component.publish(KV_EVENT_SUBJECT, &events).await;
                             timer.as_mut().reset(Instant::now() + deadline);
                         }
                         None => {
                             // Channel closed, flush remaining
                             if !buffer.is_empty() {
                                 let events: Vec<RouterEvent> = buffer.drain(..).collect();
-                                let _ = component.publish(&KV_EVENT_SUBJECT, &events).await;
+                                let _ = component.publish(KV_EVENT_SUBJECT, &events).await;
                             }
                             break;
                         }
@@ -292,7 +292,7 @@ pub mod llm_kvbm {
                         blocks,
                         worker_identifier,
                     } => {
-                        let parent_hash = blocks.first().and_then(|(_, _, parent)| parent.clone());
+                        let parent_hash = blocks.first().and_then(|(_, _, parent)| *parent);
                         let store_data = KvCacheStoreData {
                             blocks: blocks
                                 .iter()
@@ -324,7 +324,7 @@ pub mod llm_kvbm {
                         worker_identifier,
                     } => {
                         let event = KvCacheEvent {
-                            event_id: event_id,
+                            event_id,
                             data: KvCacheEventData::Removed(KvCacheRemoveData {
                                 block_hashes: vec![ExternalSequenceBlockHash(sequence_hash)],
                             }),
