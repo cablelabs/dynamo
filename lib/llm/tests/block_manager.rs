@@ -20,6 +20,7 @@
 //!
 //! The intent is to move [llm_kvbm] to a separate crate in the future.
 
+#[cfg(feature = "block-manager")]
 pub mod llm_kvbm {
     // alias for the kvbm module to make the refactor to standalone crate easier
     use dynamo_llm::block_manager as kvbm;
@@ -370,7 +371,7 @@ pub mod llm_kvbm {
     //-------------------------------- End Event Manager --------------------------------
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "testing-full"))]
 mod tests {
 
     #[allow(unused_imports)]
