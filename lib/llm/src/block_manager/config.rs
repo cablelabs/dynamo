@@ -14,6 +14,7 @@
 // limitations under the License.
 
 use super::*;
+use super::events::EventManager;
 
 #[derive(Debug, Clone)]
 pub enum NixlOptions {
@@ -173,6 +174,10 @@ pub struct KvBlockManagerConfig {
     // Specific configuration for the disk layout
     #[builder(default, setter(strip_option))]
     pub disk_layout: Option<KvManagerLayoutConfig<DiskStorage>>,
+
+    /// Event manager to handle block related events
+    #[builder(default)]
+    pub event_manager: Option<Arc<dyn EventManager>>,
 }
 
 impl KvBlockManagerConfig {
