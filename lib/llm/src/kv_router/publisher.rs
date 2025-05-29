@@ -324,8 +324,7 @@ async fn start_zmq_listener(
 
 /// Convert a raw event coming from the ZMQ channel into the internal
 /// [`KvCacheEvent`] representation used by the router. Returns `None` when the
-/// event cannot be represented with the current protocol (e.g., we ignore
-/// `AllBlocksCleared` until a concrete format is defined).
+/// event cannot be represented with the current protocol.
 fn convert_event(
     raw: RawKvEvent,
     event_id: u64,
