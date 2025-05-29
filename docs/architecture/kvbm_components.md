@@ -18,14 +18,14 @@ limitations under the License.
 
 # Understanding KVBM components
 
-The design of the KVBM is inspired from vLLM and SGLang KV block managers but with a twist from historical memory tiering design aspired in general GPU programming [See KVBM Reading](kvbm_reading.md).  The following figure shows the internal architecture of KVBM and how it works across workers using NIXL. 
+The design of the KVBM is inspired from vLLM and SGLang KV block managers but with a twist from historical memory tiering design aspired in general GPU programming [See KVBM Reading](kvbm_reading.md).  The following figure shows the internal architecture of KVBM and how it works across workers using NIXL.
 
 ![Internal architecture and key modules in the Dynamo KVBM. ](../images/kvbm-internal-arch.png)
 **Internal architecture and key modules in the Dynamo KVBM**
 
 #### KvBlockManager as Orchestration Layer
 
-The `KvBlockManager <H, D>` acts as a coordinator across memory tiers—host (CPU), device (GPU), and remote—by managing per-backend block pools and exposing consistent block lifecycle APIs. It tracks KV block locations across device memory (G1), CPU memory within and across nodes (G2), local/pooled SSDs (G3), and remote storage (G4). G1-G4 are key tiers enabled by KVBM. Critical to note that KVBM treats G4 storage as an opaque blob store, unaware of internal layout optimizations.  
+The `KvBlockManager <H, D>` acts as a coordinator across memory tiers—host (CPU), device (GPU), and remote—by managing per-backend block pools and exposing consistent block lifecycle APIs. It tracks KV block locations across device memory (G1), CPU memory within and across nodes (G2), local/pooled SSDs (G3), and remote storage (G4). G1-G4 are key tiers enabled by KVBM. Critical to note that KVBM treats G4 storage as an opaque blob store, unaware of internal layout optimizations.
 
 `KvBlockManager<H, D>\` owns:
 
@@ -60,7 +60,7 @@ Each layout is constructed using a `LayoutConfig`, and storage is either passed 
 Each `BlockPool<T>` (where `T` is `DeviceStorage`, `PinnedStorage`, and so forth) tracks two sub-pools:
 
 * `ActivePool`: Contains blocks currently in use by sequences
-* `InactivePool`: Recycled blocks ready for allocation. Think free list. 
+* `InactivePool`: Recycled blocks ready for allocation. Think free list.
 
 When a token block is requested (for example, `get_mutable_block()`), the allocator pops from `InactivePool`, transitions its state, and returns a writable handle. On sequence commit or eviction, the system resets blocks and returns them to the inactive pool.
 
@@ -73,7 +73,7 @@ The state machine (`BlockState`) that tracks the block lifecycle transitions inc
 | Complete | Block is fully filled with token data but not yet visible to others. | Still owned by creator thread | register() → Registered- reset() → Reset |
 | Registered | Block is finalized and visible for reuse. Available in the deduplication cache. Can use block for lookups | Shared ownership (global registry) | Auto drop() → triggers Remove event and transitions to Reset |
 
-This table lists the valid KVBM transitions: 
+This table lists the valid KVBM transitions:
 
 | From → To | Trigger | Validation |
 | ----- | ----- | ----- |
@@ -90,7 +90,7 @@ Consider this example lifecycle of a block in the KVBM; in it, a sequence reques
 2. `init_sequence()` → Transitions to Partial
 3. Tokens are appended → State remains Partial
 4. On full → `commit()` → State becomes Complete
-5. `register()` → Block is hashed and moved to Registered. Blocks can now be used to lookup. 
+5. `register()` → Block is hashed and moved to Registered. Blocks can now be used to lookup.
 6. On eviction or end-of-life → `drop()` of RAII handle returns block to Reset
 
 #### Lifecycle Management using RAII and Event Plane
@@ -100,7 +100,7 @@ The system uses RAII for memory lifecycle management. Every block holds metadata
 * `PublishHandle` triggers Register events
 * Dropping it triggers Remove events
 
-This pattern ensures consistency for shared memory tracking across workers without requiring explicit deallocation logic. The events are propagated in the Dynamo Events plane. Any Dynamo component subscribed to the events plane can listen to these changes. Note that even the storage provider can subscribe to the events plane and create an internal prefix tree representation that is tailored and optimized for the specific platform. 
+This pattern ensures consistency for shared memory tracking across workers without requiring explicit deallocation logic. The events are propagated in the Dynamo Events plane. Any Dynamo component subscribed to the events plane can listen to these changes. Note that even the storage provider can subscribe to the events plane and create an internal prefix tree representation that is tailored and optimized for the specific platform.
 
 #### Remote Memory Integration using NIXL
 
@@ -111,9 +111,9 @@ The NIXL agent exposes remote memory buffers using `NixlBlockSet`, `RemoteBlocks
 * `import_remote_blockset()`: Loads remote node’s block layouts into the manager
 * `get_remote_blocks_mutable()`: Fetches transferable memory views from another node
 
-`RemoteBlocks` is a lightweight abstraction over shared memory for cross-node block usage (through UCX or other backends). 
+`RemoteBlocks` is a lightweight abstraction over shared memory for cross-node block usage (through UCX or other backends).
 
-The left side of the figure in [Understanding KVBM Components](#understanding-kvbm-components) illustrates a bidirectional remote memory registration and layout synchronization protocol between workers (for example, Worker 1 and Worker 2) using NIXL. The following steps break down the process: 
+The left side of the figure in [Understanding KVBM Components](#understanding-kvbm-components) illustrates a bidirectional remote memory registration and layout synchronization protocol between workers (for example, Worker 1 and Worker 2) using NIXL. The following steps break down the process:
 
 1. *Agent Creation & Memory Registration:*
 
