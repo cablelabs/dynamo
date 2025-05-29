@@ -18,7 +18,7 @@ limitations under the License.
 
 # Understanding KVBM components
 
-The design of the KVBM is inspired from vLLM and SGLang KV block managers but with a twist from historical memory tiering design aspired in general GPU programming [See KVBM Reading](kvbm_reading.md).  The following figure shows the internal architecture of KVBM and how it works across workers using NIXL.
+The design of the KVBM is inspired from vLLM and SGLang KV block managers but with a twist from historical memory tiering design aspired in general GPU programming. [See KVBM Reading](kvbm_reading.md). The following figure shows the internal architecture of KVBM and how it works across workers using NIXL.
 
 ![Internal architecture and key modules in the Dynamo KVBM. ](../images/kvbm-internal-arch.png)
 **Internal architecture and key modules in the Dynamo KVBM**
@@ -27,7 +27,7 @@ The design of the KVBM is inspired from vLLM and SGLang KV block managers but wi
 
 The `KvBlockManager <H, D>` acts as a coordinator across memory tiers—host (CPU), device (GPU), and remote—by managing per-backend block pools and exposing consistent block lifecycle APIs. It tracks KV block locations across device memory (G1), CPU memory within and across nodes (G2), local/pooled SSDs (G3), and remote storage (G4). G1-G4 are key tiers enabled by KVBM. Critical to note that KVBM treats G4 storage as an opaque blob store, unaware of internal layout optimizations.
 
-`KvBlockManager<H, D>\` owns:
+`KvBlockManager<H, D>` owns:
 
 * A device-side `BlockPool<Device>`
 * A host-side `BlockPool<Host>`
