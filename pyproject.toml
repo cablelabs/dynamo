@@ -199,6 +199,9 @@ module = ["vllm.*", "bentoml.*", "fs.*", "_bentoml_sdk.*"]
 follow_imports = "skip"
 ignore_missing_imports = true
 
+
+[tool.sphinx]
+
 # extra-content-head
 extra_content_head = [
    '''
@@ -206,7 +209,6 @@ extra_content_head = [
    ''',
 ]
 
-[tool.sphinx]
 
 #extra-content-footer
 extra_content_footer = [

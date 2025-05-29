@@ -22,7 +22,7 @@ This directory contains examples and reference implementations for deploying Lar
 
 ## Deployment Architectures
 
-See [deployment architectures](llm_deployment.md#Deployment Architectures) to learn about the general idea of the architecture.
+See [Deployment Architectures](llm_deployment.md#deployment-architectures) to learn about the general idea of the architecture.
 Note that this TensorRT-LLM version does not support all the options yet.
 
 ```{note}
@@ -110,9 +110,8 @@ This figure shows an overview of the major components to deploy:
 
 ```
 
-```{note}
-The above architecture illustrates all the components. The final components that get spawned depend upon the chosen graph.
-```
+Note: The above architecture illustrates all the components. The final components
+that get spawned depend upon the chosen graph.
 
 ### Example architectures
 

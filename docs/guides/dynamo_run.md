@@ -541,10 +541,10 @@ The Python file must do three things:
 from dynamo.llm import ModelType, register_llm
 from dynamo.runtime import DistributedRuntime, dynamo_worker
 
-# 1. Decorate a function to get the runtime
-#
-@dynamo_worker(static=False)
-async def worker(runtime: DistributedRuntime):
+   # 1. Decorate a function to get the runtime
+   #
+   @dynamo_worker(static=False)
+   async def worker(runtime: DistributedRuntime):
 
     # 2. Register ourselves on the network
     #
