@@ -25,9 +25,9 @@ The design of the KVBM is inspired from vLLM and SGLang KV block managers but wi
 
 #### KvBlockManager as Orchestration Layer
 
-The \`KvBlockManager\<H, D\>\` acts as a coordinator across memory tiers—host (CPU), device (GPU), and remote—by managing per-backend block pools and exposing consistent block lifecycle APIs. It tracks KV block locations across device memory (G1), CPU memory within and across nodes (G2), local/pooled SSDs (G3), and remote storage (G4). G1-G4 are key tiers enabled by KVBM. Critical to note that KVBM treats G4 storage as an opaque blob store, unaware of internal layout optimizations.
+The `KvBlockManager <H, D>` acts as a coordinator across memory tiers—host (CPU), device (GPU), and remote—by managing per-backend block pools and exposing consistent block lifecycle APIs. It tracks KV block locations across device memory (G1), CPU memory within and across nodes (G2), local/pooled SSDs (G3), and remote storage (G4). G1-G4 are key tiers enabled by KVBM. Critical to note that KVBM treats G4 storage as an opaque blob store, unaware of internal layout optimizations.  
 
-\`KvBlockManager\<H, D>\` owns:
+`KvBlockManager<H, D>\` owns:
 
 * A device-side `BlockPool<Device>`
 * A host-side `BlockPool<Host>`
@@ -97,7 +97,7 @@ Consider this example lifecycle of a block in the KVBM; in it, a sequence reques
 
 The system uses RAII for memory lifecycle management. Every block holds metadata and registration state, and registration is coupled with an `EventManager`. On registration and drop:
 
-* `PublishHandle` triggers Register events  
+* `PublishHandle` triggers Register events
 * Dropping it triggers Remove events
 
 This pattern ensures consistency for shared memory tracking across workers without requiring explicit deallocation logic. The events are propagated in the Dynamo Events plane. Any Dynamo component subscribed to the events plane can listen to these changes. Note that even the storage provider can subscribe to the events plane and create an internal prefix tree representation that is tailored and optimized for the specific platform. 
@@ -113,12 +113,12 @@ The NIXL agent exposes remote memory buffers using `NixlBlockSet`, `RemoteBlocks
 
 `RemoteBlocks` is a lightweight abstraction over shared memory for cross-node block usage (through UCX or other backends). 
 
-The left side of the figure in [Understanding KVBM Components](#understanding-kvbm-components) illustrates a bidirectional remote memory registration and layout synchronization protocol between workers (that is, Worker 1 and Worker 2) using NIXL. The following steps break down the process: 
+The left side of the figure in [Understanding KVBM Components](#understanding-kvbm-components) illustrates a bidirectional remote memory registration and layout synchronization protocol between workers (for example, Worker 1 and Worker 2) using NIXL. The following steps break down the process: 
 
 1. *Agent Creation & Memory Registration:*
 
    Each worker independently sets up a NixlAgent:
-    * Registers its memory regions (for example, device memory) through `nixl_register()`.
+    * Registers its memory regions (that is, device memory) through `nixl_register()`.
     * These regions correspond to blocks managed in the local BlockPool.
       Once the worker registers the memory, NIXL creates remote-accessible descriptors, which it binds to the memory layout.
 
