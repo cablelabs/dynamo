@@ -369,8 +369,10 @@ fn convert_event(
             })
         }
         RawKvEvent::AllBlocksCleared => {
-            tracing::debug!("Received AllBlocksCleared event – currently ignored");
-            None
+            Some(KvCacheEvent {
+                event_id,
+                data: KvCacheEventData::Cleared,
+            })
         }
     }
 }
@@ -623,7 +625,8 @@ mod test_event_processing {
     fn test_convert_event_all_blocks_cleared() {
         let kv_block_size = 4;
         let raw_evt = RawKvEvent::AllBlocksCleared;
-        assert!(convert_event(raw_evt, 1, kv_block_size, &Arc::new(AtomicU32::new(0))).is_none());
+        let out = convert_event(raw_evt, 1, kv_block_size, &Arc::new(AtomicU32::new(0)));
+        assert!(matches!(out.unwrap().data, KvCacheEventData::Cleared));
     }
 }
 

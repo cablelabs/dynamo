@@ -111,6 +111,8 @@ pub enum KvCacheEventData {
     Stored(KvCacheStoreData),
     /// Data for a removed cache event.
     Removed(KvCacheRemoveData),
+    /// Data for a cleared cache event.
+    Cleared,
 }
 
 /// Represents the data associated with a stored cache event.
