@@ -546,6 +546,7 @@ mod tests {
                 // Manual debug ticker that prints forward pass metrics
                 _ = debug_interval.tick() => {
                     let _metrics = scheduler.get_forward_pass_metrics().await;
+                    println!("Forward Pass Metrics: {:#?}", _metrics);
                 }
 
                 Some(_) = output_rx.recv() => {
