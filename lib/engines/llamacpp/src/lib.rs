@@ -20,6 +20,7 @@ use llama_cpp_2::{
     model::{params::LlamaModelParams, LlamaModel},
     sampling::LlamaSampler,
     token::LlamaToken,
+    LogOptions,
 };
 
 use dynamo_llm::protocols::common::llm_backend::{BackendInput, LLMEngineOutput};
@@ -66,6 +67,7 @@ impl LlamacppEngine {
         cancel_token: CancellationToken,
         model_config: &LocalModel,
     ) -> pipeline_error::Result<Self> {
+        llama_cpp_2::send_logs_to_tracing(LogOptions::default().with_logs_enabled(true));
         let backend = LlamaBackend::init()?;
         let model = load_model(&backend, model_config.path())?;
         LLAMA_MODEL.set(model)?;
