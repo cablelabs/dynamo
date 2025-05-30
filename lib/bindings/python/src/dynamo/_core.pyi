@@ -344,7 +344,7 @@ class DisaggregatedRouter:
         """
         ...
 
-class KvMetricsPublisher:
+class WorkerMetricsPublisher:
     """
     A metrics publisher will provide KV metrics to the router.
     """
@@ -353,7 +353,7 @@ class KvMetricsPublisher:
 
     def __init__(self) -> None:
         """
-        Create a `KvMetricsPublisher` object
+        Create a `WorkerMetricsPublisher` object
         """
 
     def create_service(self, component: Component) -> None:
