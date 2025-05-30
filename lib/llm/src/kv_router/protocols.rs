@@ -107,11 +107,8 @@ pub struct KvCacheEvent {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum KvCacheEventData {
-    /// Data for a stored cache event.
     Stored(KvCacheStoreData),
-    /// Data for a removed cache event.
     Removed(KvCacheRemoveData),
-    /// Data for a cleared cache event.
     Cleared,
 }
 

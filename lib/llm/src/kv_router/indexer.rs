@@ -374,7 +374,6 @@ impl RadixTree {
                 }
             }
             KvCacheEventData::Cleared => {
-                // clear all blocks for the worker
                 self.clear_all_blocks(worker_id);
             }
         }
